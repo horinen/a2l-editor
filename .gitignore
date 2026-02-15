@@ -1,0 +1,29 @@
+/target/
+*.exe
+*.pdb
+*.db
+*.db-journal
+
+# Node
+node_modules/
+.npm
+
+# Svelte
+src-ui/.svelte-kit/
+src-ui/build/
+src-ui/.vercel/
+
+# Test
+src-ui/test-results/
+src-ui/playwright-report/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+.sisyphus/

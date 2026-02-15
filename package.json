@@ -1,0 +1,17 @@
+{
+  "name": "a2l-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["src-ui"],
+  "scripts": {
+    "dev": "npm run dev --workspace=src-ui",
+    "build": "npm run build --workspace=src-ui",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

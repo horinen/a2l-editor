@@ -1,0 +1,12 @@
+{
+  "$schema": "https://v2.tauri.app/schemas/capability.json",
+  "identifier": "default",
+  "description": "Default capabilities for the application",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "dialog:default",
+    "clipboard-manager:allow-write-text"
+  ]
+}
