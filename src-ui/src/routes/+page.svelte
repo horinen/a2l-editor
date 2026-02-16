@@ -26,12 +26,17 @@
   import { tick } from 'svelte';
 
   const appWindow = getCurrentWindow();
+  let isClosingConfirmed = false;
 
   onMount(() => {
     setupAutoLoad();
     (window as any).__test_loadFiles__ = testLoadFiles;
 
     const unlisten = appWindow.listen('close-requested', async () => {
+      if (isClosingConfirmed) {
+        return;
+      }
+      
       if ($hasUnsavedChanges) {
         requestCloseConfirm(async (save: boolean) => {
           if (save) {
@@ -43,9 +48,11 @@
               console.error('保存失败:', e);
             }
           }
+          isClosingConfirmed = true;
           await appWindow.close();
         });
       } else {
+        isClosingConfirmed = true;
         await appWindow.close();
       }
     });
