@@ -17,10 +17,11 @@
   import CloseConfirmDialog from '$lib/components/CloseConfirmDialog.svelte';
   import { setupAutoLoad, testLoadFiles } from '$lib/autoLoad';
   import { 
-    elfSelectedIndices, a2lSelectedIndices, a2lPath, elfEntries,
+    elfSelectedIndices, a2lSelectedIndices, a2lPath, elfEntries, a2lNames,
     statusMessage, showExportDialog, exportMode, exportPreview, a2lVariables,
-    hasUnsavedChanges, pendingChanges, clearPendingChanges, requestCloseConfirm
+    hasUnsavedChanges, pendingChanges, clearPendingChanges, requestCloseConfirm, addPendingChange
   } from '$lib/stores';
+  import type { A2lEntry } from '$lib/types';
   import { exportEntries, deleteVariables, searchA2lVariables, saveA2lChanges } from '$lib/commands';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { tick } from 'svelte';
@@ -86,40 +87,39 @@
   }
 
   async function handleExport(e: CustomEvent<{ indices: number[]; mode: string }>) {
-    const exportedNames = e.detail.indices
-      .map(i => $elfEntries.find(entry => entry.index === i)?.full_name)
-      .filter(Boolean) as string[];
+    const mode = e.detail.mode as 'measurement' | 'characteristic';
+    const entries = e.detail.indices
+      .map(i => $elfEntries.find(entry => entry.index === i))
+      .filter(Boolean) as A2lEntry[];
     
-    try {
-      const result = await exportEntries(e.detail.indices, e.detail.mode as 'measurement' | 'characteristic');
-      statusMessage.set(`✅ 已添加 ${result.added} 个变量到目标 A2L`);
-      
-      const variables = await searchA2lVariables('', 0, 10000);
-      a2lVariables.set(variables);
-      
-      if (exportedNames.length > 0 && result.added > 0) {
-        await tick();
-        if (a2lPanelRef) {
-          for (const name of exportedNames) {
-            if (a2lPanelRef.scrollToVariable(name)) {
-              break;
-            }
-          }
-        }
+    for (const entry of entries) {
+      if (!$a2lNames.has(entry.full_name)) {
+        addPendingChange({
+          action: 'add',
+          originalName: entry.full_name,
+          entry: entry,
+          exportMode: mode,
+        });
       }
-    } catch (err) {
-      statusMessage.set(`❌ 导出失败: ${err}`);
     }
+    
+    statusMessage.set(`✅ 已添加 ${entries.length} 个变量到待保存队列`);
     closeContextMenu();
   }
 
   async function handleDelete(e: CustomEvent<{ indices: number[] }>) {
-    try {
-      const count = await deleteVariables(e.detail.indices);
-      statusMessage.set(`✅ 已删除 ${count} 个变量`);
-    } catch (err) {
-      statusMessage.set(`❌ 删除失败: ${err}`);
+    const names = e.detail.indices
+      .map(i => $a2lVariables[i]?.name)
+      .filter(Boolean) as string[];
+    
+    for (const name of names) {
+      addPendingChange({
+        action: 'delete',
+        originalName: name,
+      });
     }
+    
+    statusMessage.set(`✅ 已添加 ${names.length} 个删除操作到待保存队列`);
     closeContextMenu();
   }
 

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { 
     a2lVariables, a2lSearchQuery, a2lSelectedIndices, toggleA2lSelection,
-    a2lSortConfigs, toggleSort, applySorting, parseAddress, hasChangeForVariable
+    a2lSortConfigs, toggleSort, applySorting, parseAddress, pendingChanges
   } from '$lib/stores';
-  import type { A2lVariable } from '$lib/types';
+  import type { A2lVariable, A2lVariableEdit } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
   import { debounce } from '$lib/utils/debounce';
   import VirtualList from './VirtualList.svelte';
@@ -221,8 +221,10 @@
   }
 
   function getRowChangeClass(variable: A2lVariable): string {
-    if (hasChangeForVariable(variable.name)) {
-      return 'modified';
+    const change = $pendingChanges.find(c => c.originalName === variable.name);
+    if (change) {
+      if (change.action === 'delete') return 'deleted';
+      if (change.action === 'modify') return 'modified';
     }
     return '';
   }
@@ -428,6 +430,21 @@
   .row.modified.selected {
     background: rgba(245, 158, 11, 0.2);
     border-left-color: #f59e0b;
+  }
+
+  /* 删除标记样式 */
+  .row.deleted {
+    border-left-color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  .row.deleted:hover, .row.deleted.hovering {
+    background: rgba(239, 68, 68, 0.15);
+  }
+
+  .row.deleted.selected {
+    background: rgba(239, 68, 68, 0.2);
+    border-left-color: #ef4444;
   }
 
   .col-icon {
