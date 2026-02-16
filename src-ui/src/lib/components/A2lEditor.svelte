@@ -1,6 +1,6 @@
 <script lang="ts">
   import { 
-    a2lVariables, a2lSelectedIndices, addPendingChange, hasChangeForVariable, getChangeForVariable 
+    a2lVariables, a2lSelectedIndices, addPendingChange, hasChangeForVariable, getChangeForVariable, removePendingChange
   } from '$lib/stores';
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
 
@@ -20,6 +20,8 @@
     data_type: string;
     var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
   } | null>(null);
+
+  let isInitialized = $state(false);
 
   let selectedVariable = $derived.by(() => {
     const indices = Array.from($a2lSelectedIndices);
@@ -51,8 +53,10 @@
         data_type: selectedVariable.data_type,
         var_type: selectedVariable.var_type,
       };
+      isInitialized = true;
     } else {
       originalValues = null;
+      isInitialized = false;
     }
   });
 
@@ -65,24 +69,36 @@
     )
   );
 
-  function applyChanges() {
-    if (!selectedVariable || !originalValues || !hasChanges) return;
+  // 自动保存变更
+  $effect(() => {
+    if (!isInitialized || !originalValues) return;
+    
+    // 访问 editBuffer 的所有字段来建立依赖
+    const { name, address, data_type, var_type } = editBuffer;
+    
+    if (name !== originalValues.name ||
+        address !== originalValues.address ||
+        data_type !== originalValues.data_type ||
+        var_type !== originalValues.var_type) {
+      const change: A2lVariableEdit = {
+        action: 'modify',
+        originalName: originalValues.name,
+      };
 
-    const change: A2lVariableEdit = {
-      action: 'modify',
-      originalName: originalValues.name,
-    };
+      if (name !== originalValues.name) change.name = name;
+      if (address !== originalValues.address) change.address = address;
+      if (data_type !== originalValues.data_type) change.data_type = data_type;
+      if (var_type !== originalValues.var_type) change.var_type = var_type;
 
-    if (editBuffer.name !== originalValues.name) change.name = editBuffer.name;
-    if (editBuffer.address !== originalValues.address) change.address = editBuffer.address;
-    if (editBuffer.data_type !== originalValues.data_type) change.data_type = editBuffer.data_type;
-    if (editBuffer.var_type !== originalValues.var_type) change.var_type = editBuffer.var_type;
-
-    addPendingChange(change);
-  }
+      addPendingChange(change);
+    } else {
+      removePendingChange(originalValues.name, 'modify');
+    }
+  });
 
   function resetChanges() {
     if (!originalValues) return;
+    removePendingChange(originalValues.name, 'modify');
     editBuffer = { ...originalValues };
   }
 </script>
@@ -137,13 +153,6 @@
     </div>
     
     <div class="editor-actions">
-      <button 
-        class="btn btn-primary" 
-        onclick={applyChanges}
-        disabled={!hasChanges}
-      >
-        应用修改
-      </button>
       <button 
         class="btn btn-secondary" 
         onclick={resetChanges}
@@ -276,17 +285,6 @@
   .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-
-  .btn-primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: white;
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    opacity: 0.9;
-    background: var(--accent);
   }
 
   .btn-secondary {
