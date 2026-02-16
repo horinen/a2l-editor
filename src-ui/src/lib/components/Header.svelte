@@ -184,6 +184,14 @@
           <span class="badge">{$pendingChanges.length}</span>
         {/if}
       </button>
+      <button 
+        class="reset-btn" 
+        onclick={clearPendingChanges}
+        disabled={!$hasUnsavedChanges}
+        title="重置所有变更"
+      >
+        ↩️ 重置
+      </button>
     {/if}
     <button class="icon-btn endianness-btn" onclick={handleToggleEndianness} title="切换字节序">
       {$endianness === 'little' ? '小端' : '大端'}
@@ -278,6 +286,30 @@
     font-size: 11px;
     font-weight: 600;
     border-radius: 9px;
+  }
+
+  .reset-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+
+  .reset-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .reset-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   .menu {

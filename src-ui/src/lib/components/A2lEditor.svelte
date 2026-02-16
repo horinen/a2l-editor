@@ -36,7 +36,18 @@
     const _ = $pendingChanges;  // 建立依赖
     if (originalValues) {
       const name = originalValues.name;
-      hasPendingChange = $pendingChanges.some(c => c.originalName === name && c.action === 'modify');
+      const hasChange = $pendingChanges.some(c => c.originalName === name && c.action === 'modify');
+      hasPendingChange = hasChange;
+      
+      // 如果变更被移除（比如通过重置按钮），恢复编辑缓冲区为原值
+      if (!hasChange && isInitialized) {
+        editBuffer = {
+          name: originalValues.name,
+          address: originalValues.address,
+          data_type: originalValues.data_type,
+          var_type: originalValues.var_type,
+        };
+      }
     } else {
       hasPendingChange = false;
     }
