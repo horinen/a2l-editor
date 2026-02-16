@@ -49,6 +49,8 @@ export const exportPreview = writable<{ added: number; skipped: number; existing
 // 主题
 export const currentTheme = writable<ThemeName>('dark');
 
+export const endianness = writable<'little' | 'big'>('little');
+
 // 派生状态
 export const elfSelectedCount = derived(elfSelectedIndices, $set => $set.size);
 export const a2lSelectedCount = derived(a2lSelectedIndices, $set => $set.size);

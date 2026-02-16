@@ -75,3 +75,7 @@ export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResu
   }));
   return invoke('save_a2l_changes', { edits: inputEdits });
 }
+
+export async function setEndianness(endianness: 'little' | 'big'): Promise<void> {
+  return invoke('set_endianness', { endianness });
+}

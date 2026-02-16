@@ -1,10 +1,10 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
-  import { currentTheme, hasUnsavedChanges, pendingChanges, a2lPath } from '$lib/stores';
+  import { currentTheme, hasUnsavedChanges, pendingChanges, a2lPath, endianness } from '$lib/stores';
   import { themes, themeNames, applyTheme, cycleTheme } from '$lib/themes';
   import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading, clearPendingChanges } from '$lib/stores';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { loadElf, loadPackage, loadA2l, saveA2lChanges } from '$lib/commands';
+  import { loadElf, loadPackage, loadA2l, saveA2lChanges, setEndianness } from '$lib/commands';
   import { 
     elfPath, elfFileName, elfTotalCount, elfEntries,
     packagePath, a2lVariables, a2lNames,
@@ -137,6 +137,12 @@
     applyTheme(next);
   }
 
+  async function handleToggleEndianness() {
+    const next = $endianness === 'little' ? 'big' : 'little';
+    endianness.set(next);
+    await setEndianness(next);
+  }
+
   function closeMenu() {
     showMenu = false;
   }
@@ -179,6 +185,9 @@
         {/if}
       </button>
     {/if}
+    <button class="icon-btn endianness-btn" onclick={handleToggleEndianness} title="切换字节序">
+      {$endianness === 'little' ? '小端' : '大端'}
+    </button>
     <button class="icon-btn theme-btn" onclick={handleCycleTheme} title="切换主题">🎨</button>
     <span class="version">{VERSION}</span>
   </div>
@@ -311,5 +320,10 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-left: 8px;
+  }
+
+  .endianness-btn {
+    min-width: 48px;
+    text-align: center;
   }
 </style>

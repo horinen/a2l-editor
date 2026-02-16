@@ -16,6 +16,7 @@ pub struct AppState {
     pub a2l_path: Option<PathBuf>,
     pub a2l_names: HashSet<String>,
     pub a2l_variables: Vec<A2lVariable>,
+    pub endianness: String,
 }
 
 #[derive(Serialize)]
@@ -459,4 +460,14 @@ pub fn save_a2l_changes(
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
 
     Ok(result)
+}
+
+#[tauri::command]
+pub fn set_endianness(endianness: String, state: State<Mutex<AppState>>) -> Result<(), String> {
+    if endianness != "little" && endianness != "big" {
+        return Err("无效的字节序，必须是 'little' 或 'big'".to_string());
+    }
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    state.endianness = endianness;
+    Ok(())
 }
