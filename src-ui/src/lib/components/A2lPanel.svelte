@@ -1,12 +1,13 @@
 <script lang="ts">
   import { 
     a2lVariables, a2lSearchQuery, a2lSelectedIndices, toggleA2lSelection,
-    a2lSortConfigs, toggleSort, applySorting, parseAddress
+    a2lSortConfigs, toggleSort, applySorting, parseAddress, hasChangeForVariable
   } from '$lib/stores';
   import type { A2lVariable } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
   import { debounce } from '$lib/utils/debounce';
   import VirtualList from './VirtualList.svelte';
+  import A2lEditor from './A2lEditor.svelte';
 
   interface Props {
     oncontextmenu?: (e: CustomEvent<{ x: number; y: number; indices: number[] }>) => void;
@@ -18,6 +19,12 @@
   let focusedIndex = $state<number | null>(null);
   let searchQuery = $state($a2lSearchQuery);
   let virtualListRef: VirtualList<A2lVariable>;
+  
+  // 编辑器面板高度 (像素)
+  let editorHeight = $state(120);
+  let isResizingEditor = $state(false);
+  const MIN_EDITOR_HEIGHT = 80;
+  const MAX_EDITOR_HEIGHT_RATIO = 0.6;
   
   // 列宽状态 (百分比)
   let colWidths = $state({ icon: 6, name: 44, type: 25, addr: 25 });
@@ -59,6 +66,28 @@
     resizing = null;
     document.removeEventListener('mousemove', handleResize);
     document.removeEventListener('mouseup', stopResize);
+  }
+
+  function startResizeEditor(e: MouseEvent) {
+    e.preventDefault();
+    isResizingEditor = true;
+    document.addEventListener('mousemove', handleResizeEditor);
+    document.addEventListener('mouseup', stopResizeEditor);
+  }
+
+  function handleResizeEditor(e: MouseEvent) {
+    const panel = document.querySelector('.panel') as HTMLElement;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const newHeight = rect.bottom - e.clientY;
+    const maxHeight = rect.height * MAX_EDITOR_HEIGHT_RATIO;
+    editorHeight = Math.max(MIN_EDITOR_HEIGHT, Math.min(maxHeight, newHeight));
+  }
+
+  function stopResizeEditor() {
+    isResizingEditor = false;
+    document.removeEventListener('mousemove', handleResizeEditor);
+    document.removeEventListener('mouseup', stopResizeEditor);
   }
   
   // 排序功能
@@ -190,6 +219,13 @@
   function getVarTypeLabel(varType: string): string {
     return varType === 'CHARACTERISTIC' ? '标定' : '观测';
   }
+
+  function getRowChangeClass(variable: A2lVariable): string {
+    if (hasChangeForVariable(variable.name)) {
+      return 'modified';
+    }
+    return '';
+  }
 </script>
 
 <div class="panel" onkeydown={handleKeydown} tabindex="0">
@@ -233,9 +269,10 @@
       {#snippet children(variable: A2lVariable, i: number)}
         {@const isSelected = $a2lSelectedIndices.has(i)}
         {@const isHovered = hoveredIndex === i}
+        {@const changeClass = getRowChangeClass(variable)}
         
         <div 
-          class="row"
+          class="row {changeClass}"
           class:selected={isSelected}
           class:hovering={isHovered}
           class:focused={focusedIndex === i}
@@ -260,6 +297,16 @@
   <div class="footer">
     显示: {displayVars.length.toLocaleString()}
   </div>
+  
+  <div 
+    class="editor-resizer" 
+    class:active={isResizingEditor}
+    onmousedown={startResizeEditor}
+  ></div>
+  
+  <div class="editor-container" style="height: {editorHeight}px;">
+    <A2lEditor />
+  </div>
 </div>
 
 <style>
@@ -273,6 +320,7 @@
   .header {
     padding: 8px 12px;
     font-weight: 500;
+    flex-shrink: 0;
   }
 
   .count {
@@ -285,6 +333,7 @@
     align-items: center;
     padding: 4px 12px;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .search-bar input {
@@ -316,6 +365,7 @@
     font-size: 11px;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
   }
 
   .table-header .col-name,
@@ -338,6 +388,7 @@
 
   .list {
     flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 
@@ -362,6 +413,21 @@
   .row.focused {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+
+  /* 修改标记样式 */
+  .row.modified {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+  }
+
+  .row.modified:hover, .row.modified.hovering {
+    background: rgba(245, 158, 11, 0.15);
+  }
+
+  .row.modified.selected {
+    background: rgba(245, 158, 11, 0.2);
+    border-left-color: #f59e0b;
   }
 
   .col-icon {
@@ -413,5 +479,24 @@
     font-size: 11px;
     color: var(--text-muted);
     border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .editor-resizer {
+    height: 6px;
+    background: var(--border);
+    cursor: row-resize;
+    flex-shrink: 0;
+    transition: background 0.2s;
+  }
+
+  .editor-resizer:hover,
+  .editor-resizer.active {
+    background: var(--accent);
+  }
+
+  .editor-container {
+    flex-shrink: 0;
+    overflow: hidden;
   }
 </style>

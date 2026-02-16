@@ -1,6 +1,6 @@
 use a2l_editor::{
-    A2lEntry, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, DataPackage, ElfParser,
-    ExportKind, PackageMeta,
+    A2lEntry, A2lEntryInfo, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, DataPackage,
+    ElfParser, ExportKind, PackageMeta, SaveResult, VariableChanges, VariableEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -389,4 +389,74 @@ pub fn delete_variables(
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
 
     Ok(deleted_count)
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VariableEditInput {
+    pub action: String,
+    pub original_name: String,
+    pub name: Option<String>,
+    pub address: Option<String>,
+    pub data_type: Option<String>,
+    pub var_type: Option<String>,
+    pub entry: Option<EntryInfo>,
+    pub export_mode: Option<String>,
+}
+
+#[tauri::command]
+pub fn save_a2l_changes(
+    edits: Vec<VariableEditInput>,
+    state: State<Mutex<AppState>>,
+) -> Result<SaveResult, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+
+    let a2l_path = state.a2l_path.as_ref().ok_or("未选择目标 A2L 文件")?;
+
+    let variable_edits: Vec<VariableEdit> = edits
+        .into_iter()
+        .map(|e| VariableEdit {
+            action: e.action,
+            original_name: e.original_name,
+            changes: if e.name.is_some()
+                || e.address.is_some()
+                || e.data_type.is_some()
+                || e.var_type.is_some()
+            {
+                Some(VariableChanges {
+                    name: e.name,
+                    address: e.address,
+                    data_type: e.data_type,
+                    var_type: e.var_type,
+                })
+            } else {
+                None
+            },
+            entry: e.entry.map(|info| A2lEntryInfo {
+                full_name: info.full_name,
+                address: info.address,
+                size: info.size,
+                a2l_type: info.a2l_type,
+                type_name: info.type_name,
+                bit_offset: info.bit_offset,
+                bit_size: info.bit_size,
+            }),
+            export_mode: e.export_mode,
+        })
+        .collect();
+
+    let content =
+        std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+
+    let (new_content, result) = A2lGenerator::apply_changes(&content, &variable_edits)
+        .map_err(|e| format!("应用变更失败: {}", e))?;
+
+    std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
+
+    let variables = A2lParser::parse_all_variables(
+        &std::fs::read_to_string(a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?,
+    );
+    state.a2l_variables = variables;
+    state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
+
+    Ok(result)
 }

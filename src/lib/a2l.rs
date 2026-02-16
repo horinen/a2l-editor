@@ -1,7 +1,44 @@
 use crate::types::{infer_a2l_type, A2lEntry, Variable};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableChanges {
+    pub name: Option<String>,
+    pub address: Option<String>,
+    pub data_type: Option<String>,
+    pub var_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableEdit {
+    pub action: String,
+    pub original_name: String,
+    pub changes: Option<VariableChanges>,
+    pub entry: Option<A2lEntryInfo>,
+    pub export_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct A2lEntryInfo {
+    pub full_name: String,
+    pub address: u64,
+    pub size: usize,
+    pub a2l_type: String,
+    pub type_name: String,
+    pub bit_offset: Option<usize>,
+    pub bit_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveResult {
+    pub modified: usize,
+    pub deleted: usize,
+    pub added: usize,
+    pub skipped: usize,
+}
 
 pub struct A2lGenerator {
     project_name: String,
@@ -405,6 +442,390 @@ impl A2lGenerator {
         }
 
         Ok(result)
+    }
+
+    /// 修改指定变量的属性
+    pub fn modify_variable(
+        content: &str,
+        original_name: &str,
+        changes: &VariableChanges,
+    ) -> Result<String> {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = String::new();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+
+            if trimmed.starts_with("/begin MEASUREMENT")
+                || trimmed.starts_with("/begin CHARACTERISTIC")
+            {
+                let block_start = i;
+                let is_measurement = trimmed.contains("MEASUREMENT");
+                let end_marker = if is_measurement {
+                    "/end MEASUREMENT"
+                } else {
+                    "/end CHARACTERISTIC"
+                };
+
+                let mut block_end = i;
+                for j in i..lines.len() {
+                    if lines[j].trim().starts_with(end_marker) {
+                        block_end = j;
+                        break;
+                    }
+                }
+
+                let mut current_var_name = "";
+                for j in (block_start + 1)..block_end {
+                    let t = lines[j].trim();
+                    if !t.is_empty() && !t.starts_with('/') {
+                        current_var_name = t.split_whitespace().next().unwrap_or("");
+                        break;
+                    }
+                }
+
+                if current_var_name == original_name {
+                    let modified_block = Self::apply_changes_to_block(
+                        &lines[block_start..=block_end],
+                        changes,
+                        is_measurement,
+                    )?;
+                    result.push_str(&modified_block);
+                    i = block_end + 1;
+                    continue;
+                } else {
+                    for j in block_start..=block_end {
+                        result.push_str(lines[j]);
+                        result.push('\n');
+                    }
+                    i = block_end + 1;
+                }
+            } else {
+                result.push_str(lines[i]);
+                result.push('\n');
+                i += 1;
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn apply_changes_to_block(
+        block_lines: &[&str],
+        changes: &VariableChanges,
+        is_measurement: bool,
+    ) -> Result<String> {
+        let mut result = String::new();
+        let new_name = changes.name.as_deref().unwrap_or("");
+        let new_address = changes.address.as_deref().unwrap_or("");
+        let new_data_type = changes.data_type.as_deref().unwrap_or("");
+        let change_to_characteristic =
+            changes.var_type.as_deref() == Some("CHARACTERISTIC") && is_measurement;
+        let change_to_measurement =
+            changes.var_type.as_deref() == Some("MEASUREMENT") && !is_measurement;
+
+        let mut original_name = String::new();
+        let mut original_address = String::new();
+        let mut original_data_type = String::new();
+
+        for line in block_lines {
+            let trimmed = line.trim();
+            if trimmed.starts_with("/begin MEASUREMENT ")
+                || trimmed.starts_with("/begin CHARACTERISTIC ")
+            {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    original_name = parts[2].to_string();
+                }
+            }
+            if let Some(addr_pos) = trimmed
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .iter()
+                .position(|&x| x == "ECU_ADDRESS")
+            {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if addr_pos + 1 < parts.len() {
+                    original_address = parts[addr_pos + 1].to_string();
+                }
+            }
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if !parts.is_empty() {
+                let a2l_types = [
+                    "UBYTE",
+                    "SBYTE",
+                    "UWORD",
+                    "SWORD",
+                    "ULONG",
+                    "SLONG",
+                    "A_UINT64",
+                    "A_INT64",
+                    "FLOAT32_IEEE",
+                    "FLOAT64_IEEE",
+                ];
+                if a2l_types.contains(&parts[0]) {
+                    original_data_type = parts[0].to_string();
+                }
+            }
+        }
+
+        if change_to_characteristic || change_to_measurement {
+            let entry = A2lEntry {
+                full_name: if new_name.is_empty() {
+                    original_name.clone()
+                } else {
+                    new_name.to_string()
+                },
+                address: if new_address.is_empty() {
+                    u64::from_str_radix(
+                        original_address
+                            .trim_start_matches("0x")
+                            .trim_start_matches("0X"),
+                        16,
+                    )
+                    .unwrap_or(0)
+                } else {
+                    u64::from_str_radix(
+                        new_address
+                            .trim_start_matches("0x")
+                            .trim_start_matches("0X"),
+                        16,
+                    )
+                    .unwrap_or(0)
+                },
+                size: 4,
+                a2l_type: if new_data_type.is_empty() {
+                    original_data_type.clone()
+                } else {
+                    new_data_type.to_string()
+                },
+                type_name: String::new(),
+                bit_offset: None,
+                bit_size: None,
+                array_index: None,
+            };
+            if change_to_characteristic {
+                return Ok(Self::generate_characteristic_block(&entry));
+            } else {
+                return Ok(Self::generate_measurement_block(&entry));
+            }
+        }
+
+        let final_name = if !new_name.is_empty() {
+            new_name
+        } else {
+            &original_name
+        };
+        let final_address = if !new_address.is_empty() {
+            new_address
+        } else {
+            &original_address
+        };
+        let final_data_type = if !new_data_type.is_empty() {
+            new_data_type
+        } else {
+            &original_data_type
+        };
+
+        for line in block_lines {
+            let trimmed = line.trim();
+
+            if trimmed.starts_with("/begin MEASUREMENT ")
+                || trimmed.starts_with("/begin CHARACTERISTIC ")
+            {
+                let indent = line.len() - line.trim_start().len();
+                let prefix = " ".repeat(indent);
+                let block_type = if is_measurement {
+                    "MEASUREMENT"
+                } else {
+                    "CHARACTERISTIC"
+                };
+                result.push_str(&format!("{}{} {} \"\"\n", prefix, "/begin", block_type));
+                continue;
+            }
+
+            if trimmed.starts_with(&original_name)
+                && line.contains(&original_name)
+                && !line.contains("SYMBOL_LINK")
+                && !line.contains("LINK_MAP")
+            {
+                let indent = line.len() - line.trim_start().len();
+                let rest_of_line = trimmed.strip_prefix(&original_name).unwrap_or("");
+                result.push_str(&format!(
+                    "{}{}{}\n",
+                    " ".repeat(indent),
+                    final_name,
+                    rest_of_line
+                ));
+                continue;
+            }
+
+            if trimmed.starts_with("ECU_ADDRESS") {
+                let indent = line.len() - line.trim_start().len();
+                result.push_str(&format!(
+                    "{}ECU_ADDRESS {}\n",
+                    " ".repeat(indent),
+                    final_address
+                ));
+                continue;
+            }
+
+            if trimmed.contains("LINK_MAP") {
+                let indent = line.len() - line.trim_start().len();
+                let addr_num = u64::from_str_radix(
+                    final_address
+                        .trim_start_matches("0x")
+                        .trim_start_matches("0X"),
+                    16,
+                )
+                .unwrap_or(0);
+                result.push_str(&format!(
+                    "{}LINK_MAP \"{}\" 0x{:X} 0 0 0 0\n",
+                    " ".repeat(indent),
+                    final_name,
+                    addr_num
+                ));
+                continue;
+            }
+
+            if trimmed.starts_with("SYMBOL_LINK") {
+                let indent = line.len() - line.trim_start().len();
+                result.push_str(&format!(
+                    "{}SYMBOL_LINK \"{}\" 0\n",
+                    " ".repeat(indent),
+                    final_name
+                ));
+                continue;
+            }
+
+            if trimmed.starts_with(&original_data_type) && !original_data_type.is_empty() {
+                let indent = line.len() - line.trim_start().len();
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    if is_measurement {
+                        result.push_str(&format!(
+                            "{}{} NO_COMPU_METHOD 0 0 {} {}\n",
+                            " ".repeat(indent),
+                            final_data_type,
+                            parts[4],
+                            parts[5]
+                        ));
+                    } else {
+                        result.push_str(&format!(
+                            "{}{} NO_COMPU_METHOD 0 0 {} {}\n",
+                            " ".repeat(indent),
+                            final_data_type,
+                            parts[4],
+                            parts[5]
+                        ));
+                    }
+                    continue;
+                }
+            }
+
+            if is_measurement && trimmed.starts_with("FORMAT") {
+                let indent = line.len() - line.trim_start().len();
+                let format_str = Self::get_format_string(final_data_type);
+                result.push_str(&format!(
+                    "{}FORMAT \"{}\"\n",
+                    " ".repeat(indent),
+                    format_str
+                ));
+                continue;
+            }
+
+            if is_measurement && trimmed.starts_with("DISPLAY") {
+                let indent = line.len() - line.trim_start().len();
+                let (min_val, max_val) = Self::get_min_max(final_data_type);
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                result.push_str(&format!(
+                    "{}DISPLAY {} {} {}\n",
+                    " ".repeat(indent),
+                    parts[1],
+                    min_val,
+                    max_val
+                ));
+                continue;
+            }
+
+            result.push_str(line);
+            result.push('\n');
+        }
+
+        Ok(result)
+    }
+
+    /// 统一应用所有变更（修改、删除、添加）
+    pub fn apply_changes(content: &str, edits: &[VariableEdit]) -> Result<(String, SaveResult)> {
+        let mut result = content.to_string();
+        let mut save_result = SaveResult {
+            modified: 0,
+            deleted: 0,
+            added: 0,
+            skipped: 0,
+        };
+
+        let existing_names = Self::parse_existing_names(content);
+
+        for edit in edits {
+            match edit.action.as_str() {
+                "modify" => {
+                    if let Some(ref changes) = edit.changes {
+                        result = Self::modify_variable(&result, &edit.original_name, changes)?;
+                        save_result.modified += 1;
+                    }
+                }
+                "delete" => {
+                    result = Self::remove_variables(&result, &[edit.original_name.clone()])?;
+                    save_result.deleted += 1;
+                }
+                "add" => {
+                    if let Some(ref entry_info) = edit.entry {
+                        if existing_names.contains(&entry_info.full_name) {
+                            save_result.skipped += 1;
+                        } else {
+                            let entry = A2lEntry {
+                                full_name: entry_info.full_name.clone(),
+                                address: entry_info.address,
+                                size: entry_info.size,
+                                a2l_type: entry_info.a2l_type.clone(),
+                                type_name: entry_info.type_name.clone(),
+                                bit_offset: entry_info.bit_offset,
+                                bit_size: entry_info.bit_size,
+                                array_index: None,
+                            };
+                            let kind = match edit.export_mode.as_deref() {
+                                Some("characteristic") => ExportKind::Characteristic,
+                                _ => ExportKind::Measurement,
+                            };
+                            let block = match kind {
+                                ExportKind::Measurement => Self::generate_measurement_block(&entry),
+                                ExportKind::Characteristic => {
+                                    Self::generate_characteristic_block(&entry)
+                                }
+                            };
+                            let insert_pos = result
+                                .find("/begin GROUP")
+                                .or_else(|| result.rfind("/end MEASUREMENT"))
+                                .or_else(|| result.rfind("/end CHARACTERISTIC"))
+                                .or_else(|| result.rfind("/end MODULE"))
+                                .unwrap_or(result.len());
+                            result = format!(
+                                "{}{}{}",
+                                &result[..insert_pos],
+                                block,
+                                &result[insert_pos..]
+                            );
+                            save_result.added += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok((result, save_result))
     }
 }
 

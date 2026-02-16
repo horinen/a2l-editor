@@ -2,10 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import type { 
   A2lEntry, 
   A2lVariable, 
+  A2lVariableEdit,
   LoadResult, 
   PackageMeta, 
   A2lLoadResult, 
   ExportResult,
+  SaveResult,
   ExportMode 
 } from './types';
 
@@ -58,4 +60,18 @@ export async function exportEntries(indices: number[], mode: ExportMode): Promis
 
 export async function deleteVariables(indices: number[]): Promise<number> {
   return invoke('delete_variables', { indices });
+}
+
+export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResult> {
+  const inputEdits = edits.map(e => ({
+    action: e.action,
+    original_name: e.originalName,
+    name: e.name,
+    address: e.address,
+    data_type: e.data_type,
+    var_type: e.var_type,
+    entry: e.entry,
+    export_mode: e.exportMode,
+  }));
+  return invoke('save_a2l_changes', { edits: inputEdits });
 }

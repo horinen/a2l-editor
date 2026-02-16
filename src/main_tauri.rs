@@ -62,7 +62,14 @@ fn main() {
             commands::search_a2l_variables,
             commands::export_entries,
             commands::delete_variables,
+            commands::save_a2l_changes,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                window.emit("close-requested", ()).ok();
+                api.prevent_close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

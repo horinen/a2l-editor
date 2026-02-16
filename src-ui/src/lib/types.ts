@@ -42,3 +42,23 @@ export interface ExportResult {
 
 export type ExportMode = 'measurement' | 'characteristic';
 export type ThemeName = 'dark' | 'light' | 'midnight' | 'ocean';
+
+export type EditActionType = 'modify' | 'delete' | 'add';
+
+export interface A2lVariableEdit {
+  action: EditActionType;
+  originalName: string;
+  name?: string;
+  address?: string;
+  data_type?: string;
+  var_type?: 'MEASUREMENT' | 'CHARACTERISTIC';
+  entry?: A2lEntry;
+  exportMode?: ExportMode;
+}
+
+export interface SaveResult {
+  modified: number;
+  deleted: number;
+  added: number;
+  skipped: number;
+}

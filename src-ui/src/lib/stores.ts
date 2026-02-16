@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import type { A2lEntry, A2lVariable, ThemeName } from './types';
+import type { A2lEntry, A2lVariable, A2lVariableEdit, ThemeName } from './types';
 
 // 排序类型定义
 export type SortField = 'name' | 'address';
@@ -213,4 +213,57 @@ export function parseAddress(addr: string | null): number {
   if (!addr) return 0;
   const hex = addr.replace(/^0x/i, '');
   return parseInt(hex, 16) || 0;
+}
+
+export const pendingChanges = writable<A2lVariableEdit[]>([]);
+export const hasUnsavedChanges = derived(pendingChanges, $changes => $changes.length > 0);
+export const changeCount = derived(pendingChanges, $changes => $changes.length);
+
+export function addPendingChange(change: A2lVariableEdit) {
+  pendingChanges.update(changes => {
+    const existing = changes.findIndex(c => c.originalName === change.originalName && c.action === change.action);
+    if (existing >= 0) {
+      const newChanges = [...changes];
+      newChanges[existing] = change;
+      return newChanges;
+    }
+    return [...changes, change];
+  });
+}
+
+export function removePendingChange(originalName: string, action?: string) {
+  pendingChanges.update(changes => {
+    if (action) {
+      return changes.filter(c => !(c.originalName === originalName && c.action === action));
+    }
+    return changes.filter(c => c.originalName !== originalName);
+  });
+}
+
+export function clearPendingChanges() {
+  pendingChanges.set([]);
+}
+
+export function getChangeForVariable(name: string): A2lVariableEdit | undefined {
+  return get(pendingChanges).find(c => c.originalName === name);
+}
+
+export function hasChangeForVariable(name: string): boolean {
+  return get(pendingChanges).some(c => c.originalName === name);
+}
+
+export const showCloseConfirmDialog = writable<boolean>(false);
+export let closeConfirmCallback: ((save: boolean) => void) | null = null;
+
+export function requestCloseConfirm(callback: (save: boolean) => void) {
+  closeConfirmCallback = callback;
+  showCloseConfirmDialog.set(true);
+}
+
+export function confirmClose(save: boolean) {
+  showCloseConfirmDialog.set(false);
+  if (closeConfirmCallback) {
+    closeConfirmCallback(save);
+    closeConfirmCallback = null;
+  }
 }

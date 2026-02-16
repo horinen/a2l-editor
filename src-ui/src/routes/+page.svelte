@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import '../app.css';
   import Header from '$lib/components/Header.svelte';
   import FileInfo from '$lib/components/FileInfo.svelte';
@@ -13,19 +14,45 @@
   import ContextMenuA2l from '$lib/components/ContextMenuA2l.svelte';
   import ContextMenuElf from '$lib/components/ContextMenuElf.svelte';
   import LoadingOverlay from '$lib/components/LoadingOverlay.svelte';
+  import CloseConfirmDialog from '$lib/components/CloseConfirmDialog.svelte';
   import { setupAutoLoad, testLoadFiles } from '$lib/autoLoad';
   import { 
     elfSelectedIndices, a2lSelectedIndices, a2lPath, elfEntries,
-    statusMessage, showExportDialog, exportMode, exportPreview, a2lVariables
+    statusMessage, showExportDialog, exportMode, exportPreview, a2lVariables,
+    hasUnsavedChanges, pendingChanges, clearPendingChanges, requestCloseConfirm
   } from '$lib/stores';
-  import { exportEntries, deleteVariables, searchA2lVariables } from '$lib/commands';
+  import { exportEntries, deleteVariables, searchA2lVariables, saveA2lChanges } from '$lib/commands';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { tick } from 'svelte';
 
+  const appWindow = getCurrentWindow();
+
   onMount(() => {
     setupAutoLoad();
-    // 暴露测试函数到 window 对象
     (window as any).__test_loadFiles__ = testLoadFiles;
+
+    const unlisten = appWindow.listen('close-requested', async () => {
+      if ($hasUnsavedChanges) {
+        requestCloseConfirm(async (save: boolean) => {
+          if (save) {
+            try {
+              const changes = $pendingChanges;
+              await saveA2lChanges(changes);
+              clearPendingChanges();
+            } catch (e) {
+              console.error('保存失败:', e);
+            }
+          }
+          await appWindow.close();
+        });
+      } else {
+        await appWindow.close();
+      }
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
   });
 
   let a2lPanelRef: A2lPanel | undefined;
@@ -51,7 +78,6 @@
   }
 
   async function handleExport(e: CustomEvent<{ indices: number[]; mode: string }>) {
-    // 获取导出的变量名列表
     const exportedNames = e.detail.indices
       .map(i => $elfEntries.find(entry => entry.index === i)?.full_name)
       .filter(Boolean) as string[];
@@ -60,15 +86,12 @@
       const result = await exportEntries(e.detail.indices, e.detail.mode as 'measurement' | 'characteristic');
       statusMessage.set(`✅ 已添加 ${result.added} 个变量到目标 A2L`);
       
-      // 重新加载 A2L 变量
       const variables = await searchA2lVariables('', 0, 10000);
       a2lVariables.set(variables);
       
-      // 定位到第一个新添加的变量
       if (exportedNames.length > 0 && result.added > 0) {
         await tick();
         if (a2lPanelRef) {
-          // 查找第一个成功添加的变量（可能在排序后的列表中）
           for (const name of exportedNames) {
             if (a2lPanelRef.scrollToVariable(name)) {
               break;
@@ -113,7 +136,7 @@
   async function handleCopyAddresses(e: CustomEvent<{ indices: number[] }>) {
     const addresses = e.detail.indices.map(i => {
       if (contextMenu.type === 'elf') {
-        const entry = $elfEntries.find(e => e.index === i);
+        const entry = $elfEntries.find(en => en.index === i);
         return entry ? `0x${entry.address.toString(16).toUpperCase().padStart(8, '0')}` : '';
       } else {
         return $a2lVariables[i]?.address || '';
@@ -187,6 +210,7 @@
 <AboutDialog />
 <HelpDialog />
 <LoadingOverlay />
+<CloseConfirmDialog />
 
 {#if contextMenu.show && contextMenu.type === 'a2l'}
   <!-- svelte-ignore a11y_click_events_have_key_events -->

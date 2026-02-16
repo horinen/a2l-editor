@@ -6,7 +6,10 @@ pub mod elf;
 pub mod hash;
 pub mod types;
 
-pub use a2l::{A2lGenerator, A2lParser, A2lVariable, AppendResult, ExportKind};
+pub use a2l::{
+    A2lEntryInfo, A2lGenerator, A2lParser, A2lVariable, AppendResult, ExportKind, SaveResult,
+    VariableChanges, VariableEdit,
+};
 pub use cache::Cache;
 pub use data_package::{DataPackage, PackageMeta};
 pub use dwarf::{analyze_variables_with_dwarf, DwarfParser};
