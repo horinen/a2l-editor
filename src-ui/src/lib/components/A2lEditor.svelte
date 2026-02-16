@@ -1,7 +1,8 @@
 <script lang="ts">
   import { 
-    a2lVariables, a2lSelectedIndices, addPendingChange, hasChangeForVariable, getChangeForVariable, removePendingChange
+    a2lVariables, a2lSelectedIndices, addPendingChange, pendingChanges, removePendingChange
   } from '$lib/stores';
+  import { get } from 'svelte/store';
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
@@ -22,6 +23,7 @@
   } | null>(null);
 
   let isInitialized = $state(false);
+  let hasPendingChange = $state(false);
 
   let selectedVariable = $derived.by(() => {
     const indices = Array.from($a2lSelectedIndices);
@@ -29,10 +31,22 @@
     return $a2lVariables[indices[0]] || null;
   });
 
+  // 监听 pendingChanges 变化，更新 hasPendingChange
+  $effect(() => {
+    const _ = $pendingChanges;  // 建立依赖
+    if (originalValues) {
+      const name = originalValues.name;
+      hasPendingChange = $pendingChanges.some(c => c.originalName === name && c.action === 'modify');
+    } else {
+      hasPendingChange = false;
+    }
+  });
+
   $effect(() => {
     if (selectedVariable) {
-      const pendingChange = getChangeForVariable(selectedVariable.name);
-      if (pendingChange && pendingChange.action === 'modify') {
+      const changes = get(pendingChanges);
+      const pendingChange = changes.find(c => c.originalName === selectedVariable.name && c.action === 'modify');
+      if (pendingChange) {
         editBuffer = {
           name: pendingChange.name || selectedVariable.name,
           address: pendingChange.address || selectedVariable.address || '',
@@ -108,7 +122,7 @@
     <div class="editor-header">
       <span class="label">编辑:</span>
       <span class="var-name">{originalValues.name}</span>
-      {#if hasChangeForVariable(originalValues.name)}
+      {#if hasPendingChange}
         <span class="pending-badge" title="有未保存的修改">●</span>
       {/if}
     </div>
