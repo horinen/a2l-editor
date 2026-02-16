@@ -2,7 +2,6 @@
   import { 
     a2lVariables, a2lSelectedIndices, addPendingChange, pendingChanges, removePendingChange
   } from '$lib/stores';
-  import { get } from 'svelte/store';
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
@@ -22,7 +21,6 @@
     var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
   } | null>(null);
 
-  let isInitialized = $state(false);
   let hasPendingChange = $state(false);
 
   let selectedVariable = $derived.by(() => {
@@ -31,32 +29,13 @@
     return $a2lVariables[indices[0]] || null;
   });
 
-  // 监听 pendingChanges 变化，更新 hasPendingChange
-  $effect(() => {
-    const _ = $pendingChanges;  // 建立依赖
-    if (originalValues) {
-      const name = originalValues.name;
-      const hasChange = $pendingChanges.some(c => c.originalName === name && c.action === 'modify');
-      hasPendingChange = hasChange;
-      
-      // 如果变更被移除（比如通过重置按钮），恢复编辑缓冲区为原值
-      if (!hasChange && isInitialized) {
-        editBuffer = {
-          name: originalValues.name,
-          address: originalValues.address,
-          data_type: originalValues.data_type,
-          var_type: originalValues.var_type,
-        };
-      }
-    } else {
-      hasPendingChange = false;
-    }
-  });
-
+  // 当选中变量变化时，更新编辑缓冲区
   $effect(() => {
     if (selectedVariable) {
-      const changes = get(pendingChanges);
-      const pendingChange = changes.find(c => c.originalName === selectedVariable.name && c.action === 'modify');
+      // 检查是否有待处理的修改
+      const hasChange = $pendingChanges.some(c => c.originalName === selectedVariable.name && c.action === 'modify');
+      const pendingChange = hasChange ? $pendingChanges.find(c => c.originalName === selectedVariable.name && c.action === 'modify') : null;
+      
       if (pendingChange) {
         editBuffer = {
           name: pendingChange.name || selectedVariable.name,
@@ -64,6 +43,7 @@
           data_type: pendingChange.data_type || selectedVariable.data_type,
           var_type: pendingChange.var_type || selectedVariable.var_type,
         };
+        hasPendingChange = true;
       } else {
         editBuffer = {
           name: selectedVariable.name,
@@ -71,6 +51,7 @@
           data_type: selectedVariable.data_type,
           var_type: selectedVariable.var_type,
         };
+        hasPendingChange = false;
       }
       originalValues = {
         name: selectedVariable.name,
@@ -78,10 +59,9 @@
         data_type: selectedVariable.data_type,
         var_type: selectedVariable.var_type,
       };
-      isInitialized = true;
     } else {
       originalValues = null;
-      isInitialized = false;
+      hasPendingChange = false;
     }
   });
 
@@ -94,11 +74,11 @@
     )
   );
 
-  // 自动保存变更
-  $effect(() => {
-    if (!isInitialized || !originalValues) return;
+  // 当 editBuffer 变化时，更新 pendingChanges
+  // 使用 $effect.preactive 来避免循环
+  $effect.pre(() => {
+    if (!originalValues) return;
     
-    // 访问 editBuffer 的所有字段来建立依赖
     const { name, address, data_type, var_type } = editBuffer;
     
     if (name !== originalValues.name ||
@@ -116,8 +96,10 @@
       if (var_type !== originalValues.var_type) change.var_type = var_type;
 
       addPendingChange(change);
+      hasPendingChange = true;
     } else {
       removePendingChange(originalValues.name, 'modify');
+      hasPendingChange = false;
     }
   });
 
@@ -125,6 +107,7 @@
     if (!originalValues) return;
     removePendingChange(originalValues.name, 'modify');
     editBuffer = { ...originalValues };
+    hasPendingChange = false;
   }
 </script>
 
