@@ -34,6 +34,7 @@
 
     const unlisten = appWindow.listen('close-requested', async () => {
       if (isClosingConfirmed) {
+        await appWindow.destroy();
         return;
       }
       
@@ -49,11 +50,11 @@
             }
           }
           isClosingConfirmed = true;
-          await appWindow.close();
+          await appWindow.destroy();
         });
       } else {
         isClosingConfirmed = true;
-        await appWindow.close();
+        await appWindow.destroy();
       }
     });
 
