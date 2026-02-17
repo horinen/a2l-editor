@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { 
     a2lVariables, a2lSelectedIndices, addPendingChange, pendingChanges, removePendingChange
   } from '$lib/stores';
@@ -32,9 +33,10 @@
   // 当选中变量变化时，更新编辑缓冲区
   $effect(() => {
     if (selectedVariable) {
-      // 检查是否有待处理的修改
-      const hasChange = $pendingChanges.some(c => c.originalName === selectedVariable.name && c.action === 'modify');
-      const pendingChange = hasChange ? $pendingChanges.find(c => c.originalName === selectedVariable.name && c.action === 'modify') : null;
+      // 使用 untrack 避免追踪 pendingChanges，防止编辑时循环重置
+      const pendingChange = untrack(() => 
+        $pendingChanges.find(c => c.originalName === selectedVariable.name && c.action === 'modify')
+      );
       
       if (pendingChange) {
         editBuffer = {
