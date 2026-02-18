@@ -58,8 +58,8 @@ export async function exportEntries(indices: number[], mode: ExportMode): Promis
   return invoke('export_entries', { indices, mode });
 }
 
-export async function deleteVariables(indices: number[]): Promise<number> {
-  return invoke('delete_variables', { indices });
+export async function deleteVariables(names: string[]): Promise<number> {
+  return invoke('delete_variables', { names });
 }
 
 export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResult> {

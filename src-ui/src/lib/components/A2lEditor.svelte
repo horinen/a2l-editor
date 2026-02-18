@@ -1,6 +1,6 @@
 <script lang="ts">
   import { 
-    a2lVariables, a2lSelectedIndices, statusMessage
+    a2lVariables, a2lSelectedNames, statusMessage
   } from '$lib/stores';
   import { saveA2lChanges, searchA2lVariables } from '$lib/commands';
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
@@ -25,9 +25,9 @@
   let isSaving = $state(false);
 
   let selectedVariable = $derived.by(() => {
-    const indices = Array.from($a2lSelectedIndices);
-    if (indices.length !== 1) return null;
-    return $a2lVariables[indices[0]] || null;
+    const names = Array.from($a2lSelectedNames);
+    if (names.length !== 1) return null;
+    return $a2lVariables.find((v: A2lVariable) => v.name === names[0]) || null;
   });
 
   // 当选中变量变化时，更新编辑缓冲区
@@ -156,9 +156,9 @@
       </button>
     </div>
   </div>
-{:else if $a2lSelectedIndices.size > 1}
+{:else if $a2lSelectedNames.size > 1}
   <div class="editor placeholder">
-    <span class="placeholder-text">已选中 {$a2lSelectedIndices.size} 个变量</span>
+    <span class="placeholder-text">已选中 {$a2lSelectedNames.size} 个变量</span>
     <span class="placeholder-hint">请选择单个变量进行编辑</span>
   </div>
 {:else}

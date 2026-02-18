@@ -37,8 +37,9 @@
 | 9. v0.0.9 重构 | 4/4 | ✅ 完成 |
 | 10. 变量编辑功能 | 8/8 | ✅ 完成 |
 | 11. 移除延迟保存 | 9/9 | ✅ 完成 |
+| 12. A2L 格式修复 | 5/5 | ✅ 完成 |
 
-**总进度**: 116/116 (100%)
+**总进度**: 121/121 (100%)
 
 **测试通过率**: 100% ✅
 
@@ -311,6 +312,19 @@
 
 ---
 
+## 阶段 12: A2L 输出格式修复
+
+### 12.1 格式问题修复
+- [x] 12.1.1 修复 `/begin MEASUREMENT` 变量名换行问题 ✅
+- [x] 12.1.2 修复 `/begin CHARACTERISTIC` 变量名换行问题 ✅
+- [x] 12.1.3 移除 CANAPE_EXT 非标准字段 ✅
+
+### 12.2 缩进问题修复
+- [x] 12.2.1 修复 `append_to_file` 第一个变量缩进多了 ✅
+- [x] 12.2.2 修复 `apply_changes` 第一个变量缩进多了 ✅
+
+---
+
 ## 问题追踪
 
 | 编号 | 问题描述 | 状态 | 备注 |
@@ -322,6 +336,10 @@
 | 5 | Shift 多选时文字被选中 | ✅ 已修复 | 在 mousedown 中调用 preventDefault |
 | 6 | Shift 多选选中的变量不对 | ✅ 已修复 | 使用显示位置索引替代原始索引 |
 | 7 | ELF 排序只对已加载的10000个变量生效 | ✅ 已修复 | 后端 search_elf_entries 支持排序参数 |
+| 8 | 删除 A2L 变量没有效果 | ✅ 已修复 | 选中状态从索引改为变量名称，避免过滤/排序后索引错位 |
+| 9 | A2L 输出变量名换到下一行 | ✅ 已修复 | `/begin MEASUREMENT/CHARACTERISTIC` 后紧跟变量名 |
+| 10 | 第一个添加的变量缩进多了 | ✅ 已修复 | 插入位置移动到行首，避免前导空格叠加 |
+| 11 | A2L 包含 CANAPE_EXT 非标准字段 | ✅ 已修复 | 移除 IF_DATA CANAPE_EXT 块 |
 
 ---
 
@@ -329,6 +347,9 @@
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-02-18 | **A2L 输出格式修复**:<br>- #9: 修复变量名换行问题，`/begin MEASUREMENT name ""` 同行<br>- #10: 修复第一个变量缩进多了，插入位置移动到行首<br>- #11: 移除 CANAPE_EXT 非标准字段（IF_DATA 块）<br>- 影响文件: a2l.rs (generate_measurement, generate_measurement_block, generate_characteristic_block, append_to_file, apply_changes) |
+| 2026-02-18 | **Bug 修复 #8**: 删除 A2L 变量没有效果<br>- 根因: `a2lSelectedIndices` 存储显示索引，但后端用原始索引访问数组<br>- 修复: 选中状态从索引改为变量名称 (`a2lSelectedNames`)<br>- 影响文件: stores.ts, A2lPanel.svelte, A2lEditor.svelte, ContextMenuA2l.svelte, StatusBar.svelte, +page.svelte, commands.ts, commands.rs |
+| 2026-02-18 | **A2L 格式问题分析**:<br>- #9: `/begin MEASUREMENT` 后变量名换到下一行（应为同行）<br>- #10: 第一个添加的变量缩进多了（插入位置包含前导空格）<br>- #11: A2L 包含 CANAPE_EXT 非标准字段 |
 | 2026-02-17 | **移除延迟保存机制**:<br>- 移除 Header 保存/重置按钮、Ctrl+S<br>- A2lEditor 重置按钮改为保存按钮<br>- 恢复添加/删除实时保存<br>- 删除 CloseConfirmDialog<br>- 移除 pendingChanges 相关代码 |
 | 2026-02-17 | **v0.1.0 功能完成**:<br>- A2L 变量编辑功能（名称、地址、类型）<br>- 大小端切换按钮<br>- 实时保存机制 |
 | 2026-02-14 | **v0.0.9 发布**:<br>- 移除 egui 代码，保留 Tauri 版本<br>- 重命名 test_core 为 a2l-cli (CLI 工具)<br>- 修复 #6: Shift 多选变量索引问题<br>- 修复 #7: 后端排序支持，解决10000条限制 |

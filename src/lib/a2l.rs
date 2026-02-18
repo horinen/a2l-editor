@@ -141,8 +141,7 @@ impl A2lGenerator {
 
         let mut output = String::new();
 
-        output.push_str("    /begin MEASUREMENT\n");
-        output.push_str(&format!("      {} \"\"\n", var.name));
+        output.push_str(&format!("    /begin MEASUREMENT {} \"\"\n", var.name));
         output.push_str(&format!(
             "      {} NO_COMPU_METHOD 0 0 {} {}\n",
             a2l_type, min_val, max_val
@@ -151,14 +150,6 @@ impl A2lGenerator {
         output.push_str("      ECU_ADDRESS_EXTENSION 0x0\n");
         output.push_str(&format!("      FORMAT \"{}\"\n", format_str));
         output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", var.name));
-        output.push_str("      /begin IF_DATA CANAPE_EXT\n");
-        output.push_str("        100\n");
-        output.push_str(&format!(
-            "        LINK_MAP \"{}\" 0x{:X} 0 0 0 0\n",
-            var.name, var.address
-        ));
-        output.push_str(&format!("        DISPLAY 0 {} {}\n", min_val, max_val));
-        output.push_str("      /end IF_DATA\n");
         output.push_str("    /end MEASUREMENT\n\n");
 
         output
@@ -171,8 +162,10 @@ impl A2lGenerator {
 
         let mut output = String::new();
 
-        output.push_str("    /begin MEASUREMENT\n");
-        output.push_str(&format!("      {} \"\"\n", entry.full_name));
+        output.push_str(&format!(
+            "    /begin MEASUREMENT {} \"\"\n",
+            entry.full_name
+        ));
         output.push_str(&format!(
             "      {} NO_COMPU_METHOD 0 0 {} {}\n",
             a2l_type, min_val, max_val
@@ -181,14 +174,6 @@ impl A2lGenerator {
         output.push_str("      ECU_ADDRESS_EXTENSION 0x0\n");
         output.push_str(&format!("      FORMAT \"{}\"\n", format_str));
         output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", entry.full_name));
-        output.push_str("      /begin IF_DATA CANAPE_EXT\n");
-        output.push_str("        100\n");
-        output.push_str(&format!(
-            "        LINK_MAP \"{}\" 0x{:X} 0 0 0 0\n",
-            entry.full_name, entry.address
-        ));
-        output.push_str(&format!("        DISPLAY 0 {} {}\n", min_val, max_val));
-        output.push_str("      /end IF_DATA\n");
         output.push_str("    /end MEASUREMENT\n\n");
 
         output
@@ -201,8 +186,10 @@ impl A2lGenerator {
 
         let mut output = String::new();
 
-        output.push_str("    /begin CHARACTERISTIC\n");
-        output.push_str(&format!("      {} \"\"\n", entry.full_name));
+        output.push_str(&format!(
+            "    /begin CHARACTERISTIC {} \"\"\n",
+            entry.full_name
+        ));
         output.push_str(&format!(
             "      VALUE 0x{:08X} {} 0 NO_COMPU_METHOD 0 {}\n",
             entry.address, record_layout, max_val
@@ -343,11 +330,27 @@ impl A2lGenerator {
             })
             .with_context(|| "无法找到合适的插入位置")?;
 
+        // 修复缩进问题：如果插入位置所在行只有空白字符，则移动到行首
+        let actual_insert_pos = {
+            let before = &content[..insert_pos];
+            if let Some(last_newline) = before.rfind('\n') {
+                let line_start = last_newline + 1;
+                let prefix = &content[line_start..insert_pos];
+                if prefix.chars().all(|c| c.is_whitespace()) {
+                    line_start
+                } else {
+                    insert_pos
+                }
+            } else {
+                0
+            }
+        };
+
         let new_content = format!(
             "{}{}{}",
-            &content[..insert_pos],
+            &content[..actual_insert_pos],
             new_blocks,
-            &content[insert_pos..]
+            &content[actual_insert_pos..]
         );
 
         let mut file = std::fs::File::create(path)?;
@@ -811,11 +814,28 @@ impl A2lGenerator {
                                 .or_else(|| result.rfind("/end CHARACTERISTIC"))
                                 .or_else(|| result.rfind("/end MODULE"))
                                 .unwrap_or(result.len());
+
+                            // 修复缩进问题：如果插入位置所在行只有空白字符，则移动到行首
+                            let actual_insert_pos = {
+                                let before = &result[..insert_pos];
+                                if let Some(last_newline) = before.rfind('\n') {
+                                    let line_start = last_newline + 1;
+                                    let prefix = &result[line_start..insert_pos];
+                                    if prefix.chars().all(|c| c.is_whitespace()) {
+                                        line_start
+                                    } else {
+                                        insert_pos
+                                    }
+                                } else {
+                                    0
+                                }
+                            };
+
                             result = format!(
                                 "{}{}{}",
-                                &result[..insert_pos],
+                                &result[..actual_insert_pos],
                                 block,
-                                &result[insert_pos..]
+                                &result[actual_insert_pos..]
                             );
                             save_result.added += 1;
                         }

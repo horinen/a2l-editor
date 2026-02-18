@@ -1,6 +1,6 @@
 <script lang="ts">
   import { 
-    a2lVariables, a2lSearchQuery, a2lSelectedIndices, toggleA2lSelection,
+    a2lVariables, a2lSearchQuery, a2lSelectedNames, toggleA2lSelection,
     a2lSortConfigs, toggleSort, applySorting, parseAddress
   } from '$lib/stores';
   import type { A2lVariable } from '$lib/types';
@@ -10,13 +10,13 @@
   import A2lEditor from './A2lEditor.svelte';
 
   interface Props {
-    oncontextmenu?: (e: CustomEvent<{ x: number; y: number; indices: number[] }>) => void;
+    oncontextmenu?: (e: CustomEvent<{ x: number; y: number; names: string[] }>) => void;
   }
   
   let { oncontextmenu }: Props = $props();
 
-  let hoveredIndex = $state<number | null>(null);
-  let focusedIndex = $state<number | null>(null);
+  let hoveredName = $state<string | null>(null);
+  let focusedName = $state<string | null>(null);
   let searchQuery = $state($a2lSearchQuery);
   let virtualListRef: VirtualList<A2lVariable>;
   
@@ -154,8 +154,9 @@
     a2lSearchQuery.set('');
   }
 
-  function handleClick(e: MouseEvent, index: number) {
-    toggleA2lSelection(index, e.ctrlKey, e.shiftKey, displayVars.length);
+  function handleClick(e: MouseEvent, name: string) {
+    const allNames = displayVars.map((v: A2lVariable) => v.name);
+    toggleA2lSelection(name, e.ctrlKey, e.shiftKey, allNames);
   }
 
   function handleMouseDown(e: MouseEvent) {
@@ -164,42 +165,50 @@
     }
   }
 
-  function handleContextMenu(e: MouseEvent, index: number) {
+  function handleContextMenu(e: MouseEvent, name: string) {
     e.preventDefault();
-    if (!$a2lSelectedIndices.has(index)) {
-      toggleA2lSelection(index, false, false, displayVars.length);
+    const allNames = displayVars.map((v: A2lVariable) => v.name);
+    if (!$a2lSelectedNames.has(name)) {
+      toggleA2lSelection(name, false, false, allNames);
     }
     oncontextmenu?.(new CustomEvent('contextmenu', { 
-      detail: { x: e.clientX, y: e.clientY, indices: Array.from($a2lSelectedIndices) } 
+      detail: { x: e.clientX, y: e.clientY, names: Array.from($a2lSelectedNames) } 
     }));
   }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'a' && e.ctrlKey) {
       e.preventDefault();
-      const allIndices = new Set(displayVars.map((_: A2lVariable, i: number) => i));
-      a2lSelectedIndices.set(allIndices);
+      const allNames = new Set(displayVars.map((v: A2lVariable) => v.name));
+      a2lSelectedNames.set(allNames);
       return;
     }
     
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      const maxIndex = displayVars.length - 1;
-      if (maxIndex < 0) return;
+      const names = displayVars.map((v: A2lVariable) => v.name);
+      if (names.length === 0) return;
       
-      if (focusedIndex === null) {
-        focusedIndex = e.key === 'ArrowDown' ? 0 : maxIndex;
+      if (focusedName === null) {
+        focusedName = e.key === 'ArrowDown' ? names[0] : names[names.length - 1];
       } else {
-        if (e.key === 'ArrowDown') {
-          focusedIndex = Math.min(focusedIndex + 1, maxIndex);
+        const currentIdx = names.indexOf(focusedName);
+        if (currentIdx === -1) {
+          focusedName = e.key === 'ArrowDown' ? names[0] : names[names.length - 1];
         } else {
-          focusedIndex = Math.max(focusedIndex - 1, 0);
+          const newIdx = e.key === 'ArrowDown' 
+            ? Math.min(currentIdx + 1, names.length - 1)
+            : Math.max(currentIdx - 1, 0);
+          focusedName = names[newIdx];
         }
       }
-      toggleA2lSelection(focusedIndex, false, false, displayVars.length);
       
-      if (virtualListRef) {
-        virtualListRef.scrollToIndex(focusedIndex);
+      const allNames = displayVars.map((v: A2lVariable) => v.name);
+      toggleA2lSelection(focusedName, false, false, allNames);
+      
+      const idx = names.indexOf(focusedName);
+      if (idx !== -1 && virtualListRef) {
+        virtualListRef.scrollToIndex(idx);
       }
     }
   }
@@ -260,21 +269,21 @@
       bind:this={virtualListRef}
     >
       {#snippet children(variable: A2lVariable, i: number)}
-        {@const isSelected = $a2lSelectedIndices.has(i)}
-        {@const isHovered = hoveredIndex === i}
+        {@const isSelected = $a2lSelectedNames.has(variable.name)}
+        {@const isHovered = hoveredName === variable.name}
         
         <div 
           class="row"
           class:selected={isSelected}
           class:hovering={isHovered}
-          class:focused={focusedIndex === i}
+          class:focused={focusedName === variable.name}
           class:characteristic={variable.var_type === 'CHARACTERISTIC'}
           data-index={i}
-          onclick={(e) => handleClick(e, i)}
+          onclick={(e) => handleClick(e, variable.name)}
           onmousedown={handleMouseDown}
-          oncontextmenu={(e) => handleContextMenu(e, i)}
-          onmouseenter={() => hoveredIndex = i}
-          onmouseleave={() => hoveredIndex = null}
+          oncontextmenu={(e) => handleContextMenu(e, variable.name)}
+          onmouseenter={() => hoveredName = variable.name}
+          onmouseleave={() => hoveredName = null}
           role="button"
         >
           <span class="col-icon" style="width: {colWidths.icon}%;" title={getVarTypeLabel(variable.var_type)}>{@html getVarTypeIcon(variable.var_type)}</span>

@@ -21,8 +21,8 @@ export const elfSortConfigs = writable<SortConfig[]>([{ field: 'name', order: 'a
 // A2L 变量 (左侧面板)
 export const a2lVariables = writable<A2lVariable[]>([]);
 export const a2lSearchQuery = writable<string>('');
-export const a2lSelectedIndices = writable<Set<number>>(new Set());
-export const lastA2lSelectedIndex = writable<number | null>(null);
+export const a2lSelectedNames = writable<Set<string>>(new Set());
+export const lastA2lSelectedName = writable<string | null>(null);
 export const a2lSortConfigs = writable<SortConfig[]>([{ field: 'name', order: 'asc' }]);
 
 // 文件状态
@@ -53,7 +53,7 @@ export const endianness = writable<'little' | 'big'>('little');
 
 // 派生状态
 export const elfSelectedCount = derived(elfSelectedIndices, $set => $set.size);
-export const a2lSelectedCount = derived(a2lSelectedIndices, $set => $set.size);
+export const a2lSelectedCount = derived(a2lSelectedNames, $set => $set.size);
 
 // 清除 ELF 选择
 export function clearElfSelection() {
@@ -62,7 +62,7 @@ export function clearElfSelection() {
 
 // 清除 A2L 选择
 export function clearA2lSelection() {
-  a2lSelectedIndices.set(new Set());
+  a2lSelectedNames.set(new Set());
 }
 
 // 切换 ELF 选中
@@ -108,33 +108,44 @@ export function toggleElfSelection(
 }
 
 // 切换 A2L 选中
-export function toggleA2lSelection(index: number, ctrlKey: boolean, shiftKey: boolean, totalCount?: number) {
-  a2lSelectedIndices.update(set => {
+// name: 当前点击项的变量名
+// allNames: 显示列表中所有项的名称数组（用于 Shift 多选）
+export function toggleA2lSelection(
+  name: string, 
+  ctrlKey: boolean, 
+  shiftKey: boolean, 
+  allNames: string[]
+) {
+  a2lSelectedNames.update(set => {
     const newSet = new Set(set);
     
-    if (shiftKey && totalCount !== undefined && totalCount > 0) {
-      const lastIndex = get(lastA2lSelectedIndex);
-      if (lastIndex !== null) {
-        const start = Math.min(lastIndex, index);
-        const end = Math.max(lastIndex, index);
-        for (let i = start; i <= end; i++) {
-          newSet.add(i);
+    if (shiftKey && allNames.length > 0) {
+      const lastName = get(lastA2lSelectedName);
+      if (lastName !== null) {
+        const startIdx = allNames.indexOf(lastName);
+        const endIdx = allNames.indexOf(name);
+        if (startIdx !== -1 && endIdx !== -1) {
+          const start = Math.min(startIdx, endIdx);
+          const end = Math.max(startIdx, endIdx);
+          for (let i = start; i <= end; i++) {
+            newSet.add(allNames[i]);
+          }
+          return newSet;
         }
-        return newSet;
       }
     }
     
     if (ctrlKey) {
-      if (newSet.has(index)) {
-        newSet.delete(index);
+      if (newSet.has(name)) {
+        newSet.delete(name);
       } else {
-        newSet.add(index);
+        newSet.add(name);
       }
-      lastA2lSelectedIndex.set(index);
+      lastA2lSelectedName.set(name);
     } else {
       newSet.clear();
-      newSet.add(index);
-      lastA2lSelectedIndex.set(index);
+      newSet.add(name);
+      lastA2lSelectedName.set(name);
     }
     return newSet;
   });
@@ -152,8 +163,8 @@ export function selectAllElf() {
 // 全选 A2L
 export function selectAllA2l() {
   a2lVariables.update(vars => {
-    const indices = new Set(vars.map((_, i) => i));
-    a2lSelectedIndices.set(indices);
+    const names = new Set(vars.map(v => v.name));
+    a2lSelectedNames.set(names);
     return vars;
   });
 }

@@ -2,11 +2,11 @@
   import { derived } from 'svelte/store';
   import { 
     elfPath, elfSelectedIndices, a2lPath, 
-    a2lSelectedIndices, statusMessage
+    a2lSelectedNames, statusMessage
   } from '$lib/stores';
 
   const hint = derived(
-    [elfPath, elfSelectedIndices, a2lPath, a2lSelectedIndices, statusMessage],
+    [elfPath, elfSelectedIndices, a2lPath, a2lSelectedNames, statusMessage],
     ([$elfPath, $elfSelected, $a2lPath, $a2lSelected, $status]) => {
       if ($status && !$status.startsWith('💡')) return $status;
       

@@ -7,15 +7,15 @@
   interface Props {
     x: number;
     y: number;
-    indices: number[];
-    ondelete?: (e: CustomEvent<{ indices: number[] }>) => void;
-    oncopyNames?: (e: CustomEvent<{ indices: number[] }>) => void;
-    oncopyAddresses?: (e: CustomEvent<{ indices: number[] }>) => void;
+    names: string[];
+    ondelete?: (e: CustomEvent<{ names: string[] }>) => void;
+    oncopyNames?: (e: CustomEvent<{ names: string[] }>) => void;
+    oncopyAddresses?: (e: CustomEvent<{ names: string[] }>) => void;
     onclear?: (e: CustomEvent) => void;
     onclose?: (e: CustomEvent) => void;
   }
   
-  let { x, y, indices, ondelete, oncopyNames, oncopyAddresses, onclear, onclose }: Props = $props();
+  let { x, y, names, ondelete, oncopyNames, oncopyAddresses, onclear, onclose }: Props = $props();
 
   let menuElement: HTMLDivElement;
   let menuX = $state(x);
@@ -44,17 +44,17 @@
   });
 
   function deleteVariables() {
-    ondelete?.(new CustomEvent('delete', { detail: { indices } }));
+    ondelete?.(new CustomEvent('delete', { detail: { names } }));
     onclose?.(new CustomEvent('close'));
   }
 
   function copyNames() {
-    oncopyNames?.(new CustomEvent('copyNames', { detail: { indices } }));
+    oncopyNames?.(new CustomEvent('copyNames', { detail: { names } }));
     onclose?.(new CustomEvent('close'));
   }
 
   function copyAddresses() {
-    oncopyAddresses?.(new CustomEvent('copyAddresses', { detail: { indices } }));
+    oncopyAddresses?.(new CustomEvent('copyAddresses', { detail: { names } }));
     onclose?.(new CustomEvent('close'));
   }
 

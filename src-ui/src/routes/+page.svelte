@@ -15,7 +15,7 @@
   import LoadingOverlay from '$lib/components/LoadingOverlay.svelte';
   import { setupAutoLoad, testLoadFiles } from '$lib/autoLoad';
   import { 
-    elfSelectedIndices, a2lSelectedIndices, a2lPath, elfEntries,
+    elfSelectedIndices, a2lSelectedNames, a2lPath, elfEntries,
     statusMessage, a2lVariables
   } from '$lib/stores';
   import { exportEntries, deleteVariables, searchA2lVariables } from '$lib/commands';
@@ -29,20 +29,21 @@
 
   let a2lPanelRef: A2lPanel | undefined;
 
-  let contextMenu = $state<{ show: boolean; x: number; y: number; indices: number[]; type: 'elf' | 'a2l' }>({
+  let contextMenu = $state<{ show: boolean; x: number; y: number; names: string[]; indices: number[]; type: 'elf' | 'a2l' }>({
     show: false,
     x: 0,
     y: 0,
+    names: [],
     indices: [],
     type: 'elf'
   });
 
-  function handleA2lContextMenu(e: CustomEvent<{ x: number; y: number; indices: number[] }>) {
-    contextMenu = { show: true, x: e.detail.x, y: e.detail.y, indices: e.detail.indices, type: 'a2l' };
+  function handleA2lContextMenu(e: CustomEvent<{ x: number; y: number; names: string[] }>) {
+    contextMenu = { show: true, x: e.detail.x, y: e.detail.y, names: e.detail.names, indices: [], type: 'a2l' };
   }
 
   function handleElfContextMenu(e: CustomEvent<{ x: number; y: number; indices: number[] }>) {
-    contextMenu = { show: true, x: e.detail.x, y: e.detail.y, indices: e.detail.indices, type: 'elf' };
+    contextMenu = { show: true, x: e.detail.x, y: e.detail.y, names: [], indices: e.detail.indices, type: 'elf' };
   }
 
   function closeContextMenu() {
@@ -78,9 +79,9 @@
     closeContextMenu();
   }
 
-  async function handleDelete(e: CustomEvent<{ indices: number[] }>) {
+  async function handleDelete(e: CustomEvent<{ names: string[] }>) {
     try {
-      const count = await deleteVariables(e.detail.indices);
+      const count = await deleteVariables(e.detail.names);
       statusMessage.set(`✅ 已删除 ${count} 个变量`);
       
       const variables = await searchA2lVariables('', 0, 10000);
@@ -91,14 +92,9 @@
     closeContextMenu();
   }
 
-  async function handleCopyNames(e: CustomEvent<{ indices: number[] }>) {
-    const names = e.detail.indices.map(i => {
-      if (contextMenu.type === 'elf') {
-        return $elfEntries.find(entry => entry.index === i)?.full_name;
-      } else {
-        return $a2lVariables[i]?.name;
-      }
-    }).filter(Boolean).join('\n');
+  // A2L 复制名称
+  async function handleA2lCopyNames(e: CustomEvent<{ names: string[] }>) {
+    const names = e.detail.names.join('\n');
     
     try {
       await writeText(names);
@@ -109,14 +105,42 @@
     closeContextMenu();
   }
 
-  async function handleCopyAddresses(e: CustomEvent<{ indices: number[] }>) {
+  // ELF 复制名称
+  async function handleElfCopyNames(e: CustomEvent<{ indices: number[] }>) {
+    const names = e.detail.indices
+      .map(i => $elfEntries.find(entry => entry.index === i)?.full_name)
+      .filter(Boolean).join('\n');
+    
+    try {
+      await writeText(names);
+      statusMessage.set('✅ 已复制名称到剪贴板');
+    } catch (err) {
+      statusMessage.set(`❌ 复制失败: ${err}`);
+    }
+    closeContextMenu();
+  }
+
+  // A2L 复制地址
+  async function handleA2lCopyAddresses(e: CustomEvent<{ names: string[] }>) {
+    const addresses = e.detail.names.map(name => {
+      const variable = $a2lVariables.find(v => v.name === name);
+      return variable?.address || '';
+    }).filter(Boolean).join('\n');
+    
+    try {
+      await writeText(addresses);
+      statusMessage.set('✅ 已复制地址到剪贴板');
+    } catch (err) {
+      statusMessage.set(`❌ 复制失败: ${err}`);
+    }
+    closeContextMenu();
+  }
+
+  // ELF 复制地址
+  async function handleElfCopyAddresses(e: CustomEvent<{ indices: number[] }>) {
     const addresses = e.detail.indices.map(i => {
-      if (contextMenu.type === 'elf') {
-        const entry = $elfEntries.find(en => en.index === i);
-        return entry ? `0x${entry.address.toString(16).toUpperCase().padStart(8, '0')}` : '';
-      } else {
-        return $a2lVariables[i]?.address || '';
-      }
+      const entry = $elfEntries.find(en => en.index === i);
+      return entry ? `0x${entry.address.toString(16).toUpperCase().padStart(8, '0')}` : '';
     }).filter(Boolean).join('\n');
     
     try {
@@ -132,7 +156,7 @@
     if (contextMenu.type === 'elf') {
       elfSelectedIndices.set(new Set());
     } else {
-      a2lSelectedIndices.set(new Set());
+      a2lSelectedNames.set(new Set());
     }
     closeContextMenu();
   }
@@ -192,10 +216,10 @@
   <ContextMenuA2l 
     x={contextMenu.x} 
     y={contextMenu.y} 
-    indices={contextMenu.indices}
+    names={contextMenu.names}
     ondelete={handleDelete}
-    oncopyNames={handleCopyNames}
-    oncopyAddresses={handleCopyAddresses}
+    oncopyNames={handleA2lCopyNames}
+    oncopyAddresses={handleA2lCopyAddresses}
     onclear={handleClearSelection}
     onclose={closeContextMenu}
   />
@@ -208,8 +232,8 @@
     y={contextMenu.y} 
     indices={contextMenu.indices}
     onexport={handleExport}
-    oncopyNames={handleCopyNames}
-    oncopyAddresses={handleCopyAddresses}
+    oncopyNames={handleElfCopyNames}
+    oncopyAddresses={handleElfCopyAddresses}
     onclear={handleClearSelection}
     onclose={closeContextMenu}
   />

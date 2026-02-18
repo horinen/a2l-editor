@@ -357,30 +357,25 @@ pub fn export_entries(
 
 #[tauri::command]
 pub fn delete_variables(
-    indices: Vec<usize>,
+    names: Vec<String>,
     state: State<Mutex<AppState>>,
 ) -> Result<usize, String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
 
     let a2l_path = state.a2l_path.as_ref().ok_or("未选择目标 A2L 文件")?;
 
-    let names_to_delete: Vec<String> = indices
-        .iter()
-        .filter_map(|&i| state.a2l_variables.get(i).map(|v| v.name.clone()))
-        .collect();
-
-    if names_to_delete.is_empty() {
+    if names.is_empty() {
         return Err("没有选中任何变量".to_string());
     }
 
     let content =
         std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
-    let new_content = A2lGenerator::remove_variables(&content, &names_to_delete)
+    let new_content = A2lGenerator::remove_variables(&content, &names)
         .map_err(|e| format!("删除变量失败: {}", e))?;
 
     std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
 
-    let deleted_count = names_to_delete.len();
+    let deleted_count = names.len();
 
     // 重新加载 A2L
     let content =
