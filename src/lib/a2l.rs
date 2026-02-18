@@ -1,5 +1,6 @@
 use crate::types::{infer_a2l_type, A2lEntry, Variable};
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
@@ -10,6 +11,7 @@ pub struct VariableChanges {
     pub address: Option<String>,
     pub data_type: Option<String>,
     pub var_type: Option<String>,
+    pub bit_mask: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,8 +65,9 @@ pub enum ExportKind {
 pub struct A2lVariable {
     pub name: String,
     pub address: Option<String>,
-    pub var_type: String,  // "MEASUREMENT" 或 "CHARACTERISTIC"
-    pub data_type: String, // "UBYTE", "UWORD", "FLOAT32_IEEE" 等
+    pub var_type: String,
+    pub data_type: String,
+    pub bit_mask: Option<String>,
 }
 
 impl A2lGenerator {
@@ -575,23 +578,37 @@ impl A2lGenerator {
     fn apply_changes_to_block(
         block_lines: &[&str],
         changes: &VariableChanges,
-        is_measurement: bool,
+        _is_measurement: bool,
     ) -> Result<String> {
-        let mut result = String::new();
         let new_name = changes.name.as_deref().unwrap_or("");
         let new_address = changes.address.as_deref().unwrap_or("");
         let new_data_type = changes.data_type.as_deref().unwrap_or("");
-        let change_to_characteristic =
-            changes.var_type.as_deref() == Some("CHARACTERISTIC") && is_measurement;
-        let change_to_measurement =
-            changes.var_type.as_deref() == Some("MEASUREMENT") && !is_measurement;
+        let new_bit_mask = changes.bit_mask.as_deref().unwrap_or("");
 
         let mut original_name = String::new();
         let mut original_address = String::new();
         let mut original_data_type = String::new();
+        let mut has_bit_mask = false;
+        let mut bit_mask_indent = 0;
+        let mut ecu_address_indent = 0;
+
+        let a2l_types = [
+            "UBYTE",
+            "SBYTE",
+            "UWORD",
+            "SWORD",
+            "ULONG",
+            "SLONG",
+            "A_UINT64",
+            "A_INT64",
+            "FLOAT32_IEEE",
+            "FLOAT64_IEEE",
+        ];
 
         for line in block_lines {
             let trimmed = line.trim();
+            let indent = line.len() - line.trim_start().len();
+
             if trimmed.starts_with("/begin MEASUREMENT ")
                 || trimmed.starts_with("/begin CHARACTERISTIC ")
             {
@@ -609,67 +626,16 @@ impl A2lGenerator {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                 if addr_pos + 1 < parts.len() {
                     original_address = parts[addr_pos + 1].to_string();
+                    ecu_address_indent = indent;
                 }
+            }
+            if trimmed.starts_with("BIT_MASK") {
+                has_bit_mask = true;
+                bit_mask_indent = indent;
             }
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if !parts.is_empty() {
-                let a2l_types = [
-                    "UBYTE",
-                    "SBYTE",
-                    "UWORD",
-                    "SWORD",
-                    "ULONG",
-                    "SLONG",
-                    "A_UINT64",
-                    "A_INT64",
-                    "FLOAT32_IEEE",
-                    "FLOAT64_IEEE",
-                ];
-                if a2l_types.contains(&parts[0]) {
-                    original_data_type = parts[0].to_string();
-                }
-            }
-        }
-
-        if change_to_characteristic || change_to_measurement {
-            let entry = A2lEntry {
-                full_name: if new_name.is_empty() {
-                    original_name.clone()
-                } else {
-                    new_name.to_string()
-                },
-                address: if new_address.is_empty() {
-                    u64::from_str_radix(
-                        original_address
-                            .trim_start_matches("0x")
-                            .trim_start_matches("0X"),
-                        16,
-                    )
-                    .unwrap_or(0)
-                } else {
-                    u64::from_str_radix(
-                        new_address
-                            .trim_start_matches("0x")
-                            .trim_start_matches("0X"),
-                        16,
-                    )
-                    .unwrap_or(0)
-                },
-                size: 4,
-                a2l_type: if new_data_type.is_empty() {
-                    original_data_type.clone()
-                } else {
-                    new_data_type.to_string()
-                },
-                type_name: String::new(),
-                bit_offset: None,
-                bit_size: None,
-                array_index: None,
-            };
-            if change_to_characteristic {
-                return Ok(Self::generate_characteristic_block(&entry));
-            } else {
-                return Ok(Self::generate_measurement_block(&entry));
+            if !parts.is_empty() && a2l_types.contains(&parts[0]) {
+                original_data_type = parts[0].to_string();
             }
         }
 
@@ -689,132 +655,89 @@ impl A2lGenerator {
             &original_data_type
         };
 
+        let begin_re = Regex::new(r"^(\s*/begin\s+(?:MEASUREMENT|CHARACTERISTIC)\s+)\S+")?;
+        let ecu_addr_re = Regex::new(r"^(\s*ECU_ADDRESS\s+)(0x[0-9a-fA-F]+)")?;
+        let link_map_addr_re = Regex::new(r#"^(.*LINK_MAP\s+"[^"]+"\s+)(0x[0-9a-fA-F]+)"#)?;
+        let data_type_re = Regex::new(&format!("^(\\s*)({})(\\s+.*)$", original_data_type))?;
+        let bit_mask_re = Regex::new(r"^(\s*BIT_MASK\s+)(0x[0-9a-fA-F]+)")?;
+
+        let mut result = String::new();
+        let mut bit_mask_inserted = false;
+
         for line in block_lines {
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("/begin MEASUREMENT ")
-                || trimmed.starts_with("/begin CHARACTERISTIC ")
-            {
-                let indent = line.len() - line.trim_start().len();
-                let prefix = " ".repeat(indent);
-                let block_type = if is_measurement {
-                    "MEASUREMENT"
-                } else {
-                    "CHARACTERISTIC"
-                };
-                result.push_str(&format!(
-                    "{}{} {} {} \"\"\n",
-                    prefix, "/begin", block_type, final_name
-                ));
-                continue;
-            }
-
-            if trimmed.starts_with(&original_name)
-                && line.contains(&original_name)
-                && !line.contains("SYMBOL_LINK")
-                && !line.contains("LINK_MAP")
-            {
-                let indent = line.len() - line.trim_start().len();
-                let rest_of_line = trimmed.strip_prefix(&original_name).unwrap_or("");
-                result.push_str(&format!(
-                    "{}{}{}\n",
-                    " ".repeat(indent),
-                    final_name,
-                    rest_of_line
-                ));
-                continue;
-            }
-
-            if trimmed.starts_with("ECU_ADDRESS") {
-                let indent = line.len() - line.trim_start().len();
-                result.push_str(&format!(
-                    "{}ECU_ADDRESS {}\n",
-                    " ".repeat(indent),
-                    final_address
-                ));
-                continue;
-            }
-
-            if trimmed.contains("LINK_MAP") {
-                let indent = line.len() - line.trim_start().len();
-                let addr_num = u64::from_str_radix(
-                    final_address
-                        .trim_start_matches("0x")
-                        .trim_start_matches("0X"),
-                    16,
-                )
-                .unwrap_or(0);
-                result.push_str(&format!(
-                    "{}LINK_MAP \"{}\" 0x{:X} 0 0 0 0\n",
-                    " ".repeat(indent),
-                    final_name,
-                    addr_num
-                ));
-                continue;
-            }
-
-            if trimmed.starts_with("SYMBOL_LINK") {
-                let indent = line.len() - line.trim_start().len();
-                result.push_str(&format!(
-                    "{}SYMBOL_LINK \"{}\" 0\n",
-                    " ".repeat(indent),
-                    final_name
-                ));
-                continue;
-            }
-
-            if trimmed.starts_with(&original_data_type) && !original_data_type.is_empty() {
-                let indent = line.len() - line.trim_start().len();
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                if parts.len() >= 6 {
-                    if is_measurement {
-                        result.push_str(&format!(
-                            "{}{} NO_COMPU_METHOD 0 0 {} {}\n",
-                            " ".repeat(indent),
-                            final_data_type,
-                            parts[4],
-                            parts[5]
-                        ));
-                    } else {
-                        result.push_str(&format!(
-                            "{}{} NO_COMPU_METHOD 0 0 {} {}\n",
-                            " ".repeat(indent),
-                            final_data_type,
-                            parts[4],
-                            parts[5]
-                        ));
+            if !new_name.is_empty() {
+                if let Some(caps) = begin_re.captures(line) {
+                    let mut modified_line = format!("{}{}", &caps[1], final_name);
+                    if let Some(rest_start) =
+                        line.find(&original_name).map(|p| p + original_name.len())
+                    {
+                        if rest_start < line.len() {
+                            modified_line.push_str(&line[rest_start..]);
+                        }
                     }
+                    modified_line.push('\n');
+                    result.push_str(&modified_line);
                     continue;
                 }
             }
 
-            if is_measurement && trimmed.starts_with("FORMAT") {
-                let indent = line.len() - line.trim_start().len();
-                let format_str = Self::get_format_string(final_data_type);
-                result.push_str(&format!(
-                    "{}FORMAT \"{}\"\n",
-                    " ".repeat(indent),
-                    format_str
-                ));
-                continue;
+            if !new_bit_mask.is_empty() && !has_bit_mask && !bit_mask_inserted {
+                if ecu_addr_re.is_match(line) {
+                    let indent = if bit_mask_indent > 0 {
+                        bit_mask_indent
+                    } else {
+                        line.len() - line.trim_start().len()
+                    };
+                    result.push_str(&format!(
+                        "{}BIT_MASK {}\n",
+                        " ".repeat(indent),
+                        new_bit_mask
+                    ));
+                    bit_mask_inserted = true;
+                }
             }
 
-            if is_measurement && trimmed.starts_with("DISPLAY") {
-                let indent = line.len() - line.trim_start().len();
-                let (min_val, max_val) = Self::get_min_max(final_data_type);
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                result.push_str(&format!(
-                    "{}DISPLAY {} {} {}\n",
-                    " ".repeat(indent),
-                    parts[1],
-                    min_val,
-                    max_val
-                ));
-                continue;
+            if !new_address.is_empty() {
+                if let Some(caps) = ecu_addr_re.captures(line) {
+                    result.push_str(&format!("{}{}\n", &caps[1], final_address));
+                    continue;
+                }
+
+                if let Some(caps) = link_map_addr_re.captures(line) {
+                    result.push_str(&format!("{}{}\n", &caps[1], final_address));
+                    continue;
+                }
+            }
+
+            if !new_data_type.is_empty() && !original_data_type.is_empty() {
+                if let Some(caps) = data_type_re.captures(line) {
+                    result.push_str(&format!("{}{}{}\n", &caps[1], final_data_type, &caps[3]));
+                    continue;
+                }
+            }
+
+            if !new_bit_mask.is_empty() && has_bit_mask {
+                if let Some(caps) = bit_mask_re.captures(line) {
+                    result.push_str(&format!("{}{}\n", &caps[1], new_bit_mask));
+                    continue;
+                }
             }
 
             result.push_str(line);
             result.push('\n');
+        }
+
+        if !new_bit_mask.is_empty() && !has_bit_mask && !bit_mask_inserted {
+            let indent = if ecu_address_indent > 0 {
+                ecu_address_indent
+            } else {
+                4
+            };
+            result.push_str(&format!(
+                "{}BIT_MASK {}\n",
+                " ".repeat(indent),
+                new_bit_mask
+            ));
         }
 
         Ok(result)
@@ -994,6 +917,7 @@ impl A2lParser {
         let mut name = String::new();
         let mut address = None;
         let mut data_type = String::new();
+        let mut bit_mask = None;
         let mut found_first_name = false;
 
         let a2l_types = [
@@ -1022,16 +946,12 @@ impl A2lParser {
                 continue;
             }
 
-            // 处理 /begin MEASUREMENT <name> "" 或 /begin CHARACTERISTIC <name> "" 格式
-            // 注意：只处理块开始的 /begin 行，不处理嵌套的 /begin IF_DATA 等
             if trimmed.starts_with("/begin MEASUREMENT ")
                 || trimmed.starts_with("/begin CHARACTERISTIC ")
             {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                // /begin MEASUREMENT <name> 或 /begin CHARACTERISTIC <name>
                 if parts.len() >= 3 {
                     let candidate = parts[2];
-                    // 确保不是数字，也不是 A2L 类型
                     if !candidate.parse::<f64>().is_ok() && !a2l_types.contains(&candidate) {
                         name = candidate.to_string();
                         found_first_name = true;
@@ -1040,7 +960,6 @@ impl A2lParser {
                 continue;
             }
 
-            // 跳过其他 /begin 或 /end 开头的行（嵌套块）
             if trimmed.starts_with('/') {
                 continue;
             }
@@ -1050,7 +969,6 @@ impl A2lParser {
                 continue;
             }
 
-            // 如果还没找到变量名，尝试从第一个非数字 token 获取
             if !found_first_name {
                 if !parts[0].parse::<f64>().is_ok() && !a2l_types.contains(&parts[0]) {
                     name = parts[0].to_string();
@@ -1058,7 +976,6 @@ impl A2lParser {
                 }
             }
 
-            // 查找数据类型 - 格式: <datatype> <conversion> 0 0 <min> <max>
             if parts.len() >= 2 {
                 let possible_type = parts[0];
                 if a2l_types.contains(&possible_type) {
@@ -1066,20 +983,23 @@ impl A2lParser {
                 }
             }
 
-            // 查找地址信息 - ECU_ADDRESS 后面跟着地址
             if let Some(addr_pos) = parts.iter().position(|&x| x == "ECU_ADDRESS") {
                 if addr_pos + 1 < parts.len() {
                     address = Some(parts[addr_pos + 1].to_string());
                 }
             }
 
-            // 对于 CHARACTERISTIC，在 VALUE 中查找地址
-            // 格式: VALUE <address> <record_layout> 0 <max>
             if block_type == "CHARACTERISTIC" {
                 if let Some(value_pos) = parts.iter().position(|&x| x == "VALUE") {
                     if value_pos + 1 < parts.len() {
                         address = Some(parts[value_pos + 1].to_string());
                     }
+                }
+            }
+
+            if let Some(mask_pos) = parts.iter().position(|&x| x == "BIT_MASK") {
+                if mask_pos + 1 < parts.len() {
+                    bit_mask = Some(parts[mask_pos + 1].to_string());
                 }
             }
         }
@@ -1089,6 +1009,7 @@ impl A2lParser {
             address,
             var_type: block_type.to_string(),
             data_type,
+            bit_mask,
         }
     }
 }

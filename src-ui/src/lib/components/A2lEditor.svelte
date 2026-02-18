@@ -6,20 +6,19 @@
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
-  const VAR_TYPES: ('MEASUREMENT' | 'CHARACTERISTIC')[] = ['MEASUREMENT', 'CHARACTERISTIC'];
 
   let editBuffer = $state<{
     name: string;
     address: string;
     data_type: string;
-    var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
-  }>({ name: '', address: '', data_type: '', var_type: 'MEASUREMENT' });
+    bit_mask: string;
+  }>({ name: '', address: '', data_type: '', bit_mask: '' });
 
   let originalValues = $state<{
     name: string;
     address: string;
     data_type: string;
-    var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
+    bit_mask: string;
   } | null>(null);
 
   let isSaving = $state(false);
@@ -30,20 +29,19 @@
     return $a2lVariables.find((v: A2lVariable) => v.name === names[0]) || null;
   });
 
-  // 当选中变量变化时，更新编辑缓冲区
   $effect(() => {
     if (selectedVariable) {
       editBuffer = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
-        var_type: selectedVariable.var_type,
+        bit_mask: selectedVariable.bit_mask || '',
       };
       originalValues = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
-        var_type: selectedVariable.var_type,
+        bit_mask: selectedVariable.bit_mask || '',
       };
     } else {
       originalValues = null;
@@ -55,7 +53,7 @@
       editBuffer.name !== originalValues.name ||
       editBuffer.address !== originalValues.address ||
       editBuffer.data_type !== originalValues.data_type ||
-      editBuffer.var_type !== originalValues.var_type
+      editBuffer.bit_mask !== originalValues.bit_mask
     )
   );
 
@@ -74,15 +72,13 @@
       if (editBuffer.name !== originalValues.name) change.name = editBuffer.name;
       if (editBuffer.address !== originalValues.address) change.address = editBuffer.address;
       if (editBuffer.data_type !== originalValues.data_type) change.data_type = editBuffer.data_type;
-      if (editBuffer.var_type !== originalValues.var_type) change.var_type = editBuffer.var_type;
+      if (editBuffer.bit_mask !== originalValues.bit_mask) change.bit_mask = editBuffer.bit_mask;
 
       await saveA2lChanges([change]);
       
-      // 刷新列表
       const variables = await searchA2lVariables('', 0, 10000);
       a2lVariables.set(variables);
       
-      // 更新 originalValues 为新值
       originalValues = { ...editBuffer };
       
       statusMessage.set('✅ 已保存');
@@ -133,12 +129,14 @@
         </select>
       </label>
       <label>
-        <span class="field-label">变量类型</span>
-        <select bind:value={editBuffer.var_type} class="field-select" disabled={isSaving}>
-          {#each VAR_TYPES as t}
-            <option value={t}>{t === 'MEASUREMENT' ? '观测' : '标定'}</option>
-          {/each}
-        </select>
+        <span class="field-label">BIT_MASK</span>
+        <input 
+          type="text" 
+          bind:value={editBuffer.bit_mask}
+          class="field-input"
+          placeholder="0x... (可选)"
+          disabled={isSaving}
+        />
       </label>
     </div>
     

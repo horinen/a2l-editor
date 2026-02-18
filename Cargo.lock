@@ -13,6 +13,7 @@ dependencies = [
  "gimli",
  "memmap2",
  "object",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

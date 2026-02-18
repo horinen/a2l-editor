@@ -395,6 +395,7 @@ pub struct VariableEditInput {
     pub address: Option<String>,
     pub data_type: Option<String>,
     pub var_type: Option<String>,
+    pub bit_mask: Option<String>,
     pub entry: Option<EntryInfo>,
     pub export_mode: Option<String>,
 }
@@ -417,12 +418,14 @@ pub fn save_a2l_changes(
                 || e.address.is_some()
                 || e.data_type.is_some()
                 || e.var_type.is_some()
+                || e.bit_mask.is_some()
             {
                 Some(VariableChanges {
                     name: e.name,
                     address: e.address,
                     data_type: e.data_type,
                     var_type: e.var_type,
+                    bit_mask: e.bit_mask,
                 })
             } else {
                 None

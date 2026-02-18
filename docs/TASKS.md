@@ -361,6 +361,8 @@
 | 19 | generate 占位符格式错误 | ✅ 已修复 | /begin CHARACTERISTIC __PLACEHOLDER__ "" |
 | 20 | generate_measurement_block 不支持 bitfield | ✅ 已修复 | 添加 BIT_MASK 和正确的 max_val |
 | 21 | generate_characteristic_block 不支持 bitfield | ✅ 已修复 | 添加 BIT_MASK 和正确的 max_val |
+| 22 | A2L 变量编辑丢失原始格式 | ✅ 已修复 | 使用正则替换替代 format 重写，保留缩进/注释/空格 |
+| 23 | BIT_MASK 字段无法编辑 | ✅ 已新增 | 添加 BIT_MASK 编辑功能，支持修改和新增 |
 
 ---
 
@@ -368,6 +370,7 @@
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-02-18 | **A2L 变量编辑优化**:<br>- 使用正则替换替代 format 重写，保留原始格式（缩进、注释、空格）<br>- 移除变量类型切换功能（MEASUREMENT ↔ CHARACTERISTIC）<br>- 新增 BIT_MASK 编辑功能，支持修改和新增<br>- 新增 BIT_MASK 时插入到 ECU_ADDRESS 行之前<br>- 添加 regex 依赖<br>- 影响文件: Cargo.toml, a2l.rs, commands.rs, types.ts, A2lEditor.svelte |
 | 2026-02-18 | **全面修复 A2L 格式问题**:<br>- #17: 修复 modify_variable 无法识别新格式<br>- #18: 修复 apply_changes_to_block 输出丢失变量名<br>- #19: 修复 generate 占位符格式错误<br>- #20-21: 添加 bitfield 支持（BIT_MASK 和正确的 max_val）<br>- 添加 is_bitfield() 方法和 calculate_bit_mask()、get_bitfield_max() 函数 |
 | 2026-02-18 | **A2L 删除变量修复**:<br>- #15: 修复 remove_variables 无法识别新格式<br>- #16: 修复 parse_existing_names 无法识别新格式<br>- 根因: 两个函数假设变量名在 /begin 行之后，但标准格式在同一行<br>- 影响文件: a2l.rs |
 | 2026-02-18 | **A2L 输出格式修复**:<br>- #12: 修复变量名换行问题，`/begin MEASUREMENT name ""` 同行<br>- #13: 修复第一个变量缩进多了，插入位置移动到行首<br>- #14: 移除 CANAPE_EXT 非标准字段（IF_DATA 块）<br>- 影响文件: a2l.rs (generate_measurement, generate_measurement_block, generate_characteristic_block, append_to_file, apply_changes) |

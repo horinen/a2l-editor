@@ -1,1451 +1,495 @@
 {
+  "version": "2.0",
+  "generated_at": "2026-02-18T00:00:00Z",
+  "description": "A2L Editor E2E 测试用例 - 针对最近修复问题",
+  
   "test_cases": [
     {
-      "id": "TC-FILE-001",
-      "category": "TC-FILE",
-      "name": "加载 ELF 数据包文件",
-      "description": "测试通过测试辅助函数加载 ELF 数据包(.a2ldata)文件",
+      "id": "TC-SELECTION-001",
+      "suite": "TS-SELECTION-FIX",
+      "name": "test_search_filter_delete",
+      "description": "测试搜索过滤后删除变量，验证选中状态使用名称而非索引",
       "priority": "critical",
-      "preconditions": ["应用已启动", "Mock API 已注入"],
+      "related_issue": "#8",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "调用 window.__test_loadFiles__('/mock/test.a2ldata', null)",
-          "selector": null,
-          "wait_for": "networkidle",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "等待状态栏显示加载成功",
-          "selector": ".status-bar, .footer",
-          "wait_for": "visible",
-          "expected": "包含 '已加载' 或数字",
-          "timeout": 3000
-        },
-        {
-          "step": 3,
-          "action": "验证 ELF 变量列表已渲染",
-          "selector": ".panel-right .row, .list .row",
-          "wait_for": "visible",
-          "expected": "至少存在 1 个 .row 元素",
-          "timeout": 3000
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "fill", "target": ".panel-left .search-bar input", "value": "existing" },
+        { "action": "wait", "duration": 500 },
+        { "action": "assert", "target": ".panel-left .list .row", "expect": "visible" },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "assert", "target": ".panel-left .list .row.selected", "expect": "count:1" },
+        { "action": "contextmenu", "target": ".panel-left .list .row.selected" },
+        { "action": "wait_for_selector", "target": ".context-menu", "timeout": 1000 },
+        { "action": "click", "target": ".context-menu button:has-text('删除')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已删除" }
       ],
-      "expected_result": {
-        "status_bar": "显示已加载 N 个条目",
-        "elf_panel": "显示 ELF 变量列表",
-        "row_count": "大于 0"
-      },
+      "expected_result": "删除的是选中名称的变量，而非显示位置对应的索引",
       "validation": {
-        "type": "element_count",
-        "selector": ".panel-right .row, .list .row",
-        "min_count": 1
+        "type": "mock_state",
+        "check": "deleted variable names match selected names"
       },
-      "mock_requirements": ["loadPackage", "searchElfEntries"]
+      "mock_requirements": ["delete_variables with names"]
     },
     {
-      "id": "TC-FILE-002",
-      "category": "TC-FILE",
-      "name": "加载 ELF 文件(已存在数据包)",
-      "description": "测试加载已有对应数据包的 ELF 文件",
+      "id": "TC-SELECTION-002",
+      "suite": "TS-SELECTION-FIX",
+      "name": "test_search_filter_edit",
+      "description": "测试搜索过滤后编辑变量，验证选中状态使用名称而非索引",
       "priority": "critical",
-      "preconditions": ["应用已启动", "Mock API 已注入"],
+      "related_issue": "#8",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "调用 window.__test_loadFiles__('/mock/test.elf', null)",
-          "selector": null,
-          "wait_for": "networkidle"
-        },
-        {
-          "step": 2,
-          "action": "验证加载成功",
-          "selector": ".status-bar",
-          "expected": "包含条目数量"
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "fill", "target": ".panel-left .search-bar input", "value": "legacy" },
+        { "action": "wait", "duration": 500 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "wait_for_selector", "target": ".editor input", "timeout": 2000 },
+        { "action": "fill", "target": ".editor .field-input:first-of-type", "value": "ModifiedLegacyVar" },
+        { "action": "click", "target": ".editor button:has-text('保存')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已保存" }
       ],
-      "expected_result": {
-        "status_bar": "显示已加载 N 个条目",
-        "elf_panel": "显示解析后的变量列表"
-      },
-      "mock_requirements": ["loadElf", "searchElfEntries"]
-    },
-    {
-      "id": "TC-FILE-003",
-      "category": "TC-FILE",
-      "name": "加载 ELF 文件(无数据包)",
-      "description": "测试加载没有对应数据包的 ELF 文件时弹出生成对话框",
-      "priority": "high",
-      "preconditions": ["应用已启动", "Mock API 已注入"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "调用 window.__test_loadFiles__('/mock/no_package.elf', null)",
-          "selector": null,
-          "wait_for": "networkidle"
-        },
-        {
-          "step": 2,
-          "action": "验证生成对话框显示",
-          "selector": ".dialog, [role='dialog'], .generate-dialog",
-          "wait_for": "visible"
-        }
-      ],
-      "expected_result": {
-        "dialog": "显示 '生成数据包' 对话框",
-        "dialog_content": "显示 ELF 文件名和默认输出路径"
-      },
-      "mock_requirements": ["loadElf (returns error)"]
-    },
-    {
-      "id": "TC-FILE-004",
-      "category": "TC-FILE",
-      "name": "生成数据包",
-      "description": "测试从 ELF 文件生成新的数据包",
-      "priority": "critical",
-      "preconditions": ["显示 '生成数据包' 对话框"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击生成按钮",
-          "selector": "button.generate, button:has-text('生成'), .dialog button.primary",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "等待生成完成",
-          "wait_for": "networkidle",
-          "timeout": 5000
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示数据包生成成功",
-        "elf_panel": "显示解析后的变量列表"
-      },
-      "mock_requirements": ["generatePackage", "searchElfEntries"]
-    },
-    {
-      "id": "TC-FILE-005",
-      "category": "TC-FILE",
-      "name": "加载 A2L 文件",
-      "description": "测试加载目标 A2L 文件",
-      "priority": "critical",
-      "preconditions": ["应用已启动", "Mock API 已注入"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "调用 window.__test_loadFiles__(null, '/mock/test.a2l')",
-          "selector": null,
-          "wait_for": "networkidle"
-        },
-        {
-          "step": 2,
-          "action": "验证 A2L 变量列表显示",
-          "selector": ".panel-left .row, .a2l-panel .row",
-          "wait_for": "visible"
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示已加载目标 A2L (N 个变量)",
-        "a2l_panel": "显示 A2L 变量列表"
-      },
-      "mock_requirements": ["loadA2l", "searchA2lVariables"]
-    },
-    {
-      "id": "TC-FILE-006",
-      "category": "TC-FILE",
-      "name": "保存 A2L 更改",
-      "description": "测试保存对 A2L 文件的修改",
-      "priority": "critical",
-      "preconditions": ["已加载 A2L 文件", "存在未保存的更改"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击保存按钮",
-          "selector": "button.save, button:has-text('保存')",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "等待保存完成",
-          "wait_for": "networkidle"
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示已保存 N 个更改",
-        "save_button": "变回禁用状态",
-        "pending_changes": "清空"
-      },
-      "mock_requirements": ["saveA2lChanges", "searchA2lVariables"]
-    },
-    {
-      "id": "TC-FILE-007",
-      "category": "TC-FILE",
-      "name": "重置未保存更改",
-      "description": "测试重置所有未保存的更改",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待 A2L 表格渲染",
-          "selector": ".panel-left .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "选中单个 A2L 变量以创建未保存的更改",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "click",
-          "timeout": 2000
-        },
-        {
-          "step": 3,
-          "action": "在编辑面板修改变量名称以创建更改",
-          "selector": ".edit-panel input[name='name'], .variable-detail input:first-of-type",
-          "event": "fill",
-          "value": "TestModifiedName",
-          "timeout": 2000
-        },
-        {
-          "step": 4,
-          "action": "验证更改已创建（保存按钮应启用）",
-          "selector": "button.save:not([disabled])",
-          "wait_for": "visible",
-          "timeout": 2000
-        },
-        {
-          "step": 5,
-          "action": "点击重置按钮",
-          "selector": "button.reset, button:has-text('重置')",
-          "event": "click",
-          "timeout": 2000
-        }
-      ],
-      "expected_result": {
-        "pending_changes": "清空",
-        "a2l_panel": "恢复到原始状态",
-        "save_button": "禁用状态"
-      },
-      "mock_requirements": [],
-      "notes": [
-        "迭代4修复：增加步骤1-4用于创建未保存的更改，满足前置条件",
-        "必须在点击重置前先创建更改，否则重置功能无法验证"
-      ]
-    },
-    {
-      "id": "TC-FILE-008",
-      "category": "TC-FILE",
-      "name": "关闭确认对话框",
-      "description": "测试有未保存更改时关闭应用的确认",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件", "存在未保存的更改"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "触发关闭事件",
-          "selector": null,
-          "event": "custom:close-requested"
-        }
-      ],
-      "expected_result": {
-        "dialog": "显示 '关闭确认' 对话框",
-        "options": "提供保存、不保存、取消选项"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SEARCH-001",
-      "category": "TC-SEARCH",
-      "name": "搜索 ELF 变量",
-      "description": "测试在 ELF 变量列表中搜索",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "在 ELF 面板搜索框输入搜索关键词",
-          "selector": ".panel-right input[type='text'], .panel-right .search-bar input",
-          "event": "fill",
-          "value": "variable"
-        },
-        {
-          "step": 2,
-          "action": "等待搜索结果更新 (考虑防抖 300ms)",
-          "wait_for": "timeout:500"
-        },
-        {
-          "step": 3,
-          "action": "验证结果",
-          "selector": ".panel-right .footer",
-          "expected": "显示过滤后的数量"
-        }
-      ],
-      "expected_result": {
-        "elf_panel": "只显示匹配的变量",
-        "footer": "显示过滤后的数量"
-      },
+      "expected_result": "编辑的是选中名称的变量，而非显示位置对应的索引",
       "validation": {
-        "type": "text_contains",
-        "selector": ".panel-right .footer",
-        "contains": "显示"
+        "type": "mock_state",
+        "check": "modified variable name matches selected name"
       },
-      "mock_requirements": ["searchElfEntries"]
+      "mock_requirements": ["save_a2l_changes"]
     },
     {
-      "id": "TC-SEARCH-002",
-      "category": "TC-SEARCH",
-      "name": "搜索 A2L 变量",
-      "description": "测试在 A2L 变量列表中搜索",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "在 A2L 面板搜索框输入搜索关键词",
-          "selector": ".panel-left input[type='text'], .panel-left .search-bar input",
-          "event": "fill",
-          "value": "existing"
-        },
-        {
-          "step": 2,
-          "action": "等待搜索结果更新",
-          "wait_for": "timeout:500"
-        }
-      ],
-      "expected_result": {
-        "a2l_panel": "只显示匹配的变量",
-        "footer": "显示过滤后的数量"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SEARCH-003",
-      "category": "TC-SEARCH",
-      "name": "清除搜索",
-      "description": "测试清除搜索框恢复全部显示",
-      "priority": "medium",
-      "preconditions": ["已执行搜索"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击搜索框的清除按钮",
-          "selector": ".search-bar .clear-btn, button.clear-btn",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "search_input": "清空",
-        "list": "显示全部变量"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SEARCH-004",
-      "category": "TC-SEARCH",
-      "name": "ELF 变量排序-按名称",
-      "description": "测试按名称排序 ELF 变量",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击 ELF 面板的 '变量名' 列头",
-          "selector": ".panel-right .table-header .col-name.sortable, .panel-right .table-header .sortable:first-child",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "验证排序指示器",
-          "selector": ".panel-right .table-header .col-name",
-          "expected": "包含 ▲ 或 ▼"
-        },
-        {
-          "step": 3,
-          "action": "再次点击验证降序排序",
-          "selector": ".panel-right .table-header .col-name.sortable",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "sort_indicator": "显示升序/降序箭头",
-        "list_order": "按名称排序"
-      },
-      "mock_requirements": ["searchElfEntries"]
-    },
-    {
-      "id": "TC-SEARCH-005",
-      "category": "TC-SEARCH",
-      "name": "ELF 变量排序-按地址",
-      "description": "测试按地址排序 ELF 变量",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击 ELF 面板的 '地址' 列头",
-          "selector": ".panel-right .table-header .col-addr.sortable",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "验证排序指示器",
-          "selector": ".panel-right .table-header .col-addr",
-          "expected": "包含 ▲ 或 ▼"
-        }
-      ],
-      "expected_result": {
-        "sort_indicator": "显示升序/降序箭头",
-        "list_order": "按地址排序"
-      },
-      "mock_requirements": ["searchElfEntries"]
-    },
-    {
-      "id": "TC-SEARCH-006",
-      "category": "TC-SEARCH",
-      "name": "搜索防抖",
-      "description": "验证搜索输入的防抖功能(300ms)",
-      "priority": "medium",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "快速连续输入多个字符",
-          "selector": ".panel-right input[type='text']",
-          "event": "type_sequence",
-          "value": ["v", "a", "r"],
-          "interval_ms": 100
-        },
-        {
-          "step": 2,
-          "action": "等待防抖触发",
-          "wait_for": "timeout:400"
-        }
-      ],
-      "expected_result": {
-        "api_calls": "只在停止输入 300ms 后调用一次"
-      },
-      "mock_requirements": ["searchElfEntries"]
-    },
-    {
-      "id": "TC-SELECT-001",
-      "category": "TC-SELECT",
-      "name": "单选 ELF 变量",
-      "description": "测试单击选择单个 ELF 变量",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "清除 ELF 面板搜索框（避免前序测试 TC-SEARCH-001 残留搜索关键词）",
-          "selector": ".panel-right input[type='text'], .panel-right .search-bar input",
-          "event": "fill",
-          "value": "",
-          "timeout": 1000
-        },
-        {
-          "step": 2,
-          "action": "等待搜索结果恢复完整列表（防抖后）",
-          "wait_for": "timeout:500"
-        },
-        {
-          "step": 3,
-          "action": "确保数据已加载，等待表格渲染完成",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000,
-          "retry": 3,
-          "note": "关键步骤：必须等待 VirtualList 完成渲染"
-        },
-        {
-          "step": 4,
-          "action": "验证至少有一行数据",
-          "validation": {
-            "type": "element_count",
-            "selector": ".panel-right .list .row",
-            "min_count": 1
-          }
-        },
-        {
-          "step": 5,
-          "action": "点击 ELF 列表中的第一个变量行",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "click",
-          "timeout": 3000
-        },
-        {
-          "step": 6,
-          "action": "验证行被选中",
-          "selector": ".panel-right .list .row.selected, .panel-right .list .row:first-child.selected",
-          "wait_for": "visible",
-          "timeout": 2000
-        }
-      ],
-      "expected_result": {
-        "row": "高亮显示 (class 包含 'selected')",
-        "selected_count": "1"
-      },
-      "validation": {
-        "type": "element_exists",
-        "selector": ".panel-right .list .row.selected"
-      },
-      "mock_requirements": [],
-      "notes": [
-        "迭代4修复：增加步骤1-2清除搜索框，解决前序测试 TC-SEARCH-001 残留搜索关键词导致列表为空的问题",
-        "VirtualList 组件使用虚拟滚动，需要等待渲染完成"
-      ]
-    },
-    {
-      "id": "TC-SELECT-002",
-      "category": "TC-SELECT",
-      "name": "Ctrl+点击多选",
-      "description": "测试按住 Ctrl 点击实现多选",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包", "表格已渲染"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "点击第一个变量",
-          "selector": ".panel-right .list .row:nth-child(1)",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "按住 Ctrl 点击第二个变量",
-          "selector": ".panel-right .list .row:nth-child(2)",
-          "event": "click",
-          "modifiers": ["Control"]
-        },
-        {
-          "step": 4,
-          "action": "按住 Ctrl 点击第三个变量",
-          "selector": ".panel-right .list .row:nth-child(3)",
-          "event": "click",
-          "modifiers": ["Control"]
-        }
-      ],
-      "expected_result": {
-        "selected_count": "3",
-        "rows": "全部高亮显示"
-      },
-      "validation": {
-        "type": "element_count",
-        "selector": ".panel-right .list .row.selected",
-        "expected_count": 3
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SELECT-003",
-      "category": "TC-SELECT",
-      "name": "Shift+点击范围选择",
-      "description": "测试按住 Shift 点击实现范围选择",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包", "表格已渲染"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "点击第一个变量",
-          "selector": ".panel-right .list .row:nth-child(1)",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "按住 Shift 点击第十个变量",
-          "selector": ".panel-right .list .row:nth-child(10)",
-          "event": "click",
-          "modifiers": ["Shift"]
-        }
-      ],
-      "expected_result": {
-        "selected_count": "10",
-        "rows": "1-10 全部高亮显示"
-      },
-      "validation": {
-        "type": "element_count",
-        "selector": ".panel-right .list .row.selected",
-        "min_count": 2
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SELECT-004",
-      "category": "TC-SELECT",
-      "name": "全选快捷键",
-      "description": "测试 Ctrl+A 全选功能",
-      "priority": "high",
-      "preconditions": ["已加载 ELF 数据包", "搜索框有焦点"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染并点击表格区域获取焦点",
-          "selector": ".panel-right .panel",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "按 Ctrl+A",
-          "selector": ".panel-right .panel",
-          "event": "keyboard",
-          "key": "a",
-          "modifiers": ["Control"]
-        }
-      ],
-      "expected_result": {
-        "selected_count": "等于当前显示的变量数量"
-      },
-      "validation": {
-        "type": "element_count",
-        "selector": ".panel-right .list .row.selected",
-        "min_count": 1
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-SELECT-005",
-      "category": "TC-SELECT",
-      "name": "右键菜单选择",
-      "description": "测试右键点击未选中项时自动选中",
-      "priority": "medium",
-      "preconditions": ["已加载 ELF 数据包"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "点击第一行",
-          "selector": ".panel-right .list .row:nth-child(1)",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "右键点击第二行",
-          "selector": ".panel-right .list .row:nth-child(2)",
-          "event": "contextmenu"
-        }
-      ],
-      "expected_result": {
-        "selection": "只有右键点击的项被选中",
-        "context_menu": "显示"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EDIT-001",
-      "category": "TC-EDIT",
-      "name": "编辑 A2L 变量名称",
-      "description": "测试修改 A2L 变量的名称",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待 A2L 表格渲染",
-          "selector": ".panel-left .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "选中单个 A2L 变量",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "在编辑面板修改名称",
-          "selector": ".edit-panel input[name='name'], .variable-detail input:first-of-type",
-          "event": "fill",
-          "value": "ModifiedName"
-        }
-      ],
-      "expected_result": {
-        "edit_panel": "显示修改后的名称",
-        "row": "显示修改标记",
-        "save_button": "启用并显示变更数量"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EDIT-002",
-      "category": "TC-EDIT",
-      "name": "编辑 A2L 变量地址",
-      "description": "测试修改 A2L 变量的地址",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "选中单个 A2L 变量",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "在编辑面板修改地址",
-          "selector": ".edit-panel input[name='address'], .variable-detail input[type='text']:nth-of-type(2)",
-          "event": "fill",
-          "value": "0x12345678"
-        }
-      ],
-      "expected_result": {
-        "edit_panel": "显示修改后的地址",
-        "pending_change": "被记录"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EDIT-003",
-      "category": "TC-EDIT",
-      "name": "修改数据类型",
-      "description": "测试通过下拉框修改数据类型",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件", "选中单个变量"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击数据类型下拉框",
-          "selector": ".edit-panel select[name='data_type'], .variable-detail select:first-of-type",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "选择不同的类型",
-          "selector": ".edit-panel select[name='data_type'] option:nth-child(2)",
-          "event": "select",
-          "value": "UWORD"
-        }
-      ],
-      "expected_result": {
-        "data_type": "更新为新类型",
-        "pending_change": "被记录"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EDIT-004",
-      "category": "TC-EDIT",
-      "name": "修改变量类型",
-      "description": "测试切换观测/标定类型",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件", "选中单个变量"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击变量类型下拉框",
-          "selector": ".edit-panel select[name='var_type'], .variable-detail select:last-of-type",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "切换 MEASUREMENT <-> CHARACTERISTIC",
-          "selector": ".edit-panel select[name='var_type']",
-          "event": "select",
-          "value": "CHARACTERISTIC"
-        }
-      ],
-      "expected_result": {
-        "var_type": "更新为新类型",
-        "pending_change": "被记录"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EDIT-005",
-      "category": "TC-EDIT",
-      "name": "重置单个变量编辑",
-      "description": "测试重置单个变量的修改",
-      "priority": "medium",
-      "preconditions": ["已修改变量但未保存"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击编辑面板的 '重置' 按钮",
-          "selector": ".edit-panel button.reset, .variable-detail button:has-text('重置')",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "edit_panel": "恢复到原始值",
-        "pending_change": "该变量的修改被移除"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EXPORT-001",
-      "category": "TC-EXPORT",
-      "name": "导出为观测变量",
-      "description": "测试将 ELF 变量导出为 MEASUREMENT 类型",
+      "id": "TC-SELECTION-003",
+      "suite": "TS-SELECTION-FIX",
+      "name": "test_sort_then_delete",
+      "description": "测试排序后删除变量，验证选中状态正确",
       "priority": "critical",
-      "preconditions": ["已加载 ELF 数据包", "已加载目标 A2L 文件"],
+      "related_issue": "#8",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "清除 ELF 面板搜索框（避免前序测试残留搜索关键词）",
-          "selector": ".panel-right input[type='text'], .panel-right .search-bar input",
-          "event": "fill",
-          "value": "",
-          "timeout": 1000
-        },
-        {
-          "step": 2,
-          "action": "等待搜索结果恢复完整列表（防抖后）",
-          "wait_for": "timeout:500"
-        },
-        {
-          "step": 3,
-          "action": "等待表格渲染并验证数据存在",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000,
-          "retry": 3
-        },
-        {
-          "step": 4,
-          "action": "验证至少有一行数据可操作",
-          "validation": {
-            "type": "element_count",
-            "selector": ".panel-right .list .row",
-            "min_count": 1
-          }
-        },
-        {
-          "step": 5,
-          "action": "在 ELF 面板选择变量",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "click",
-          "timeout": 2000
-        },
-        {
-          "step": 6,
-          "action": "右键打开菜单",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "contextmenu"
-        },
-        {
-          "step": 7,
-          "action": "选择 '添加为观测变量'",
-          "selector": ".context-menu button:has-text('观测'), .context-menu li:first-child",
-          "event": "click",
-          "timeout": 2000
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .table-header .sortable:last-child" },
+        { "action": "wait", "duration": 300 },
+        { "action": "click", "target": ".panel-left .list .row:nth-child(2)" },
+        { "action": "contextmenu", "target": ".panel-left .list .row:nth-child(2)" },
+        { "action": "click", "target": ".context-menu button:has-text('删除')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已删除" }
       ],
-      "expected_result": {
-        "status_bar": "显示已添加 N 个变量到待保存队列",
-        "pending_changes": "包含添加操作"
-      },
-      "mock_requirements": [],
-      "notes": [
-        "迭代4修复：增加步骤1-4清除搜索框并验证数据加载，",
-        "解决继承 TC-SELECT-001 的空列表状态问题"
-      ]
+      "expected_result": "排序后删除的是选中名称的变量",
+      "mock_requirements": ["delete_variables with names"]
     },
     {
-      "id": "TC-EXPORT-002",
-      "category": "TC-EXPORT",
-      "name": "导出为标定变量",
-      "description": "测试将 ELF 变量导出为 CHARACTERISTIC 类型",
-      "priority": "critical",
-      "preconditions": ["已加载 ELF 数据包", "已加载目标 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "在 ELF 面板选择变量",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "右键选择 '添加为标定变量'",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "contextmenu"
-        },
-        {
-          "step": 4,
-          "action": "点击标定变量选项",
-          "selector": ".context-menu button:has-text('标定'), .context-menu li:nth-child(2)",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示已添加 N 个变量到待保存队列",
-        "pending_changes": "包含添加操作，类型为 CHARACTERISTIC"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EXPORT-003",
-      "category": "TC-EXPORT",
-      "name": "导出已存在的变量",
-      "description": "测试导出 A2L 中已存在的变量时跳过",
+      "id": "TC-SELECTION-004",
+      "suite": "TS-SELECTION-FIX",
+      "name": "test_copy_address_after_search",
+      "description": "测试搜索后复制地址，验证复制的是正确变量的地址",
       "priority": "high",
-      "preconditions": ["已加载 ELF 数据包", "已加载目标 A2L 文件"],
+      "related_issue": "#8",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "选择 A2L 中已存在的变量 (灰色显示)",
-          "selector": ".panel-right .list .row.muted:first-child, .panel-right .list .row:has(.muted)",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "右键尝试导出",
-          "selector": ".panel-right .list .row.muted:first-child",
-          "event": "contextmenu"
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "fill", "target": ".panel-left .search-bar input", "value": "variable_0001" },
+        { "action": "wait", "duration": 500 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-left .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('复制地址')" },
+        { "action": "wait", "duration": 200 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已复制" }
       ],
-      "expected_result": {
-        "status_bar": "显示跳过信息",
-        "pending_changes": "不包含该变量"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-EXPORT-004",
-      "category": "TC-EXPORT",
-      "name": "未加载 A2L 时导出按钮禁用",
-      "description": "测试未加载目标 A2L 时导出菜单项禁用",
-      "priority": "medium",
-      "preconditions": ["已加载 ELF 数据包", "未加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待表格渲染",
-          "selector": ".panel-right .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "在 ELF 面板选择变量",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "右键打开菜单",
-          "selector": ".panel-right .list .row:first-child",
-          "event": "contextmenu"
-        }
-      ],
-      "expected_result": {
-        "export_buttons": "禁用状态 (disabled 或 class 包含 'disabled')"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-DELETE-001",
-      "category": "TC-DELETE",
-      "name": "删除 A2L 变量",
-      "description": "测试删除选中的 A2L 变量",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待 A2L 表格渲染",
-          "selector": ".panel-left .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "在 A2L 面板选择变量",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "右键选择 '删除变量'",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "contextmenu"
-        },
-        {
-          "step": 4,
-          "action": "点击删除选项",
-          "selector": ".context-menu button:has-text('删除'), .context-menu li:has-text('删除')",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示已添加删除操作到待保存队列",
-        "row": "显示删除标记",
-        "pending_changes": "包含删除操作"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-DELETE-002",
-      "category": "TC-DELETE",
-      "name": "批量删除 A2L 变量",
-      "description": "测试批量删除多个 A2L 变量",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待 A2L 表格渲染",
-          "selector": ".panel-left .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "选择多个 A2L 变量 (Ctrl+点击)",
-          "selector": ".panel-left .list .row",
-          "event": "click_multiple",
-          "modifiers": ["Control"],
-          "count": 3
-        },
-        {
-          "step": 3,
-          "action": "右键选择 '删除变量'",
-          "selector": ".panel-left .list .row.selected:last-child",
-          "event": "contextmenu"
-        }
-      ],
-      "expected_result": {
-        "status_bar": "显示删除数量",
-        "pending_changes": "包含多个删除操作"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-DELETE-003",
-      "category": "TC-DELETE",
-      "name": "取消删除标记",
-      "description": "测试通过重置取消删除操作",
-      "priority": "medium",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "等待 A2L 表格渲染",
-          "selector": ".panel-left .list .row",
-          "wait_for": "visible",
-          "timeout": 5000
-        },
-        {
-          "step": 2,
-          "action": "在 A2L 面板选择变量",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "click",
-          "timeout": 2000
-        },
-        {
-          "step": 3,
-          "action": "右键点击打开上下文菜单",
-          "selector": ".panel-left .list .row:first-child",
-          "event": "contextmenu"
-        },
-        {
-          "step": 4,
-          "action": "点击删除选项以创建删除标记",
-          "selector": ".context-menu button:has-text('删除'), .context-menu li:has-text('删除')",
-          "event": "click",
-          "timeout": 2000
-        },
-        {
-          "step": 5,
-          "action": "验证删除标记已创建（保存按钮应启用）",
-          "selector": "button.save:not([disabled])",
-          "wait_for": "visible",
-          "timeout": 2000
-        },
-        {
-          "step": 6,
-          "action": "点击 '重置' 按钮",
-          "selector": "button.reset, button:has-text('重置')",
-          "event": "click",
-          "timeout": 2000
-        }
-      ],
-      "expected_result": {
-        "row": "删除标记消失",
-        "pending_changes": "清空"
-      },
-      "mock_requirements": [],
-      "notes": [
-        "迭代4修复：增加步骤1-5用于创建删除标记，满足前置条件",
-        "必须在点击重置前先执行删除操作，否则重置功能无法验证"
-      ]
-    },
-    {
-      "id": "TC-UI-001",
-      "category": "TC-UI",
-      "name": "切换主题",
-      "description": "测试点击主题按钮切换主题",
-      "priority": "medium",
-      "preconditions": ["应用已启动"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "记录当前主题",
-          "selector": "html, body",
-          "validation": "获取 data-theme 或 class 属性"
-        },
-        {
-          "step": 2,
-          "action": "点击主题按钮",
-          "selector": "button.theme-toggle, button[aria-label*='主题'], header button:first-of-type",
-          "event": "click"
-        },
-        {
-          "step": 3,
-          "action": "验证主题变化",
-          "selector": "html, body",
-          "validation": "data-theme 或 class 已改变"
-        }
-      ],
-      "expected_result": {
-        "theme": "在 dark, light, midnight, ocean 间循环"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-UI-002",
-      "category": "TC-UI",
-      "name": "切换字节序",
-      "description": "测试切换大小端字节序",
-      "priority": "medium",
-      "preconditions": ["应用已启动"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "点击字节序按钮",
-          "selector": "button.endianness, button:has-text('小端'), button:has-text('大端')",
-          "event": "click"
-        },
-        {
-          "step": 2,
-          "action": "验证切换",
-          "selector": "button.endianness, button:has-text('小端'), button:has-text('大端')",
-          "expected": "文本从小端变为大端或反之"
-        }
-      ],
-      "expected_result": {
-        "button_text": "在 '小端' 和 '大端' 间切换"
-      },
-      "mock_requirements": ["setEndianness"]
-    },
-    {
-      "id": "TC-UI-003",
-      "category": "TC-UI",
-      "name": "调整面板宽度",
-      "description": "测试拖动分割线调整面板宽度",
-      "priority": "medium",
-      "preconditions": ["应用已启动"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "获取分割线元素",
-          "selector": ".resizer"
-        },
-        {
-          "step": 2,
-          "action": "模拟拖动",
-          "selector": ".resizer",
-          "event": "drag",
-          "delta_x": 100
-        }
-      ],
-      "expected_result": {
-        "panel_width": "调整到新位置",
-        "localStorage": "保存新的宽度值"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-UI-004",
-      "category": "TC-UI",
-      "name": "调整编辑器高度",
-      "description": "测试调整 A2L 编辑器面板高度",
-      "priority": "low",
-      "preconditions": ["已加载 A2L 文件"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "拖动编辑器上方的分割线",
-          "selector": ".edit-panel-resizer, .a2l-panel .resizer",
-          "event": "drag",
-          "delta_y": 50
-        }
-      ],
-      "expected_result": {
-        "editor_height": "调整到新位置"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-UI-005",
-      "category": "TC-UI",
-      "name": "快捷键 Ctrl+S 保存",
-      "description": "测试 Ctrl+S 快捷键触发保存",
-      "priority": "high",
-      "preconditions": ["已加载 A2L 文件", "有未保存更改"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "按 Ctrl+S",
-          "selector": "body",
-          "event": "keyboard",
-          "key": "s",
-          "modifiers": ["Control"]
-        }
-      ],
-      "expected_result": {
-        "save_action": "触发保存"
-      },
-      "mock_requirements": ["saveA2lChanges"]
-    },
-    {
-      "id": "TC-UI-006",
-      "category": "TC-UI",
-      "name": "Escape 关闭对话框",
-      "description": "测试 Escape 键关闭对话框",
-      "priority": "medium",
-      "preconditions": ["对话框打开"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "按 Escape 键",
-          "selector": "body",
-          "event": "keyboard",
-          "key": "Escape"
-        }
-      ],
-      "expected_result": {
-        "dialog": "关闭"
-      },
-      "mock_requirements": []
-    },
-    {
-      "id": "TC-CLIPBOARD-001",
-      "category": "TC-CLIPBOARD",
-      "name": "复制变量名称",
-      "description": "测试右键复制选中变量的名称",
-      "priority": "medium",
-      "preconditions": ["已选择变量"],
-      "steps": [
-        {
-          "step": 1,
-          "action": "右键选择 '复制名称'",
-          "selector": ".context-menu button:has-text('复制名称'), .context-menu li:has-text('复制名称')",
-          "event": "click"
-        }
-      ],
-      "expected_result": {
-        "clipboard": "包含变量名称(换行分隔)",
-        "status_bar": "显示已复制"
+      "expected_result": "复制的是选中名称变量的地址",
+      "validation": {
+        "type": "clipboard",
+        "check": "clipboard contains correct address"
       },
       "mock_requirements": ["writeText"]
     },
     {
-      "id": "TC-CLIPBOARD-002",
-      "category": "TC-CLIPBOARD",
-      "name": "复制变量地址",
-      "description": "测试右键复制选中变量的地址",
-      "priority": "medium",
-      "preconditions": ["已选择变量"],
+      "id": "TC-OUTPUT-001",
+      "suite": "TS-OUTPUT-FORMAT",
+      "name": "test_measurement_block_format",
+      "description": "测试 MEASUREMENT 块输出格式：变量名在 /begin 同行",
+      "priority": "critical",
+      "related_issue": "#12",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "右键选择 '复制地址'",
-          "selector": ".context-menu button:has-text('复制地址'), .context-menu li:has-text('复制地址')",
-          "event": "click"
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('观测')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已添加" }
       ],
-      "expected_result": {
-        "clipboard": "包含变量地址(换行分隔)",
-        "status_bar": "显示已复制"
+      "expected_result": "生成的 MEASUREMENT 块格式为 /begin MEASUREMENT name \"\"",
+      "validation": {
+        "type": "output_format",
+        "pattern": "/begin MEASUREMENT \\w+ \"\"",
+        "should_not_match": "/begin MEASUREMENT\\n\\s+\\w+"
       },
-      "mock_requirements": ["writeText"]
+      "mock_requirements": ["export_entries", "generate_measurement_block"]
     },
     {
-      "id": "TC-CLIPBOARD-003",
-      "category": "TC-CLIPBOARD",
-      "name": "批量复制",
-      "description": "测试批量复制多个变量的名称/地址",
-      "priority": "medium",
-      "preconditions": ["已选择多个变量"],
+      "id": "TC-OUTPUT-002",
+      "suite": "TS-OUTPUT-FORMAT",
+      "name": "test_characteristic_block_format",
+      "description": "测试 CHARACTERISTIC 块输出格式：变量名在 /begin 同行",
+      "priority": "critical",
+      "related_issue": "#12",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
       "steps": [
-        {
-          "step": 1,
-          "action": "选择多个变量",
-          "selector": ".panel-right .list .row",
-          "event": "click_multiple",
-          "count": 3,
-          "modifiers": ["Control"]
-        },
-        {
-          "step": 2,
-          "action": "右键复制名称",
-          "selector": ".context-menu button:has-text('复制名称')",
-          "event": "click"
-        }
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('标定')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已添加" }
       ],
-      "expected_result": {
-        "clipboard": "包含所有选中变量的名称"
+      "expected_result": "生成的 CHARACTERISTIC 块格式为 /begin CHARACTERISTIC name \"\"",
+      "validation": {
+        "type": "output_format",
+        "pattern": "/begin CHARACTERISTIC \\w+ \"\"",
+        "should_not_match": "/begin CHARACTERISTIC\\n\\s+\\w+"
       },
-      "mock_requirements": ["writeText"]
+      "mock_requirements": ["export_entries", "generate_characteristic_block"]
+    },
+    {
+      "id": "TC-OUTPUT-003",
+      "suite": "TS-OUTPUT-FORMAT",
+      "name": "test_first_variable_indentation",
+      "description": "测试第一个添加的变量缩进正确（插入位置在行首）",
+      "priority": "critical",
+      "related_issue": "#13",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件（无现有变量）"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('观测')" },
+        { "action": "wait", "duration": 300 }
+      ],
+      "expected_result": "插入位置的缩进正确，不包含多余空白",
+      "validation": {
+        "type": "output_format",
+        "check": "no leading whitespace before /begin"
+      },
+      "mock_requirements": ["append_to_file"]
+    },
+    {
+      "id": "TC-OUTPUT-004",
+      "suite": "TS-OUTPUT-FORMAT",
+      "name": "test_parse_new_format",
+      "description": "测试解析新格式 A2L 文件（变量名在 /begin 同行）",
+      "priority": "critical",
+      "related_issue": "#15-17",
+      "preconditions": ["A2L 文件使用新格式"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "call_mock", "function": "setMockA2lVariables", "args": {"variables": "newFormatVariables"} },
+        { "action": "call_test_helper", "function": "__test_loadFiles__", "args": [null, "/mock/new_format.a2l"] },
+        { "action": "wait", "duration": 500 },
+        { "action": "assert", "target": ".panel-left .list .row", "expect": "count:>0" }
+      ],
+      "expected_result": "新格式的变量被正确解析和显示",
+      "mock_requirements": ["load_a2l", "parse_all_variables"]
+    },
+    {
+      "id": "TC-OUTPUT-005",
+      "suite": "TS-OUTPUT-FORMAT",
+      "name": "test_remove_variables_new_format",
+      "description": "测试删除新格式的变量",
+      "priority": "critical",
+      "related_issue": "#14",
+      "preconditions": ["A2L 文件使用新格式", "已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "call_mock", "function": "setMockA2lVariables", "args": {"variables": "newFormatVariables"} },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-left .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('删除')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已删除" }
+      ],
+      "expected_result": "新格式的变量被正确识别和删除",
+      "mock_requirements": ["delete_variables", "remove_variables"]
+    },
+    {
+      "id": "TC-BITFIELD-001",
+      "suite": "TS-BITFIELD",
+      "name": "test_add_bitfield_measurement",
+      "description": "测试添加 bitfield 变量为 MEASUREMENT，验证 BIT_MASK 生成",
+      "priority": "critical",
+      "related_issue": "#19",
+      "preconditions": ["已加载包含 bitfield 的 ELF 数据包", "已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "call_mock", "function": "setMockElfEntries", "args": {"entries": "bitfieldEntries"} },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row[data-bitfield='true']:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row[data-bitfield='true']:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('观测')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已添加" }
+      ],
+      "expected_result": "生成的 MEASUREMENT 块包含 BIT_MASK 字段",
+      "validation": {
+        "type": "output_format",
+        "pattern": "BIT_MASK 0x[0-9A-Fa-f]+"
+      },
+      "mock_requirements": ["generate_measurement_block with BIT_MASK"]
+    },
+    {
+      "id": "TC-BITFIELD-002",
+      "suite": "TS-BITFIELD",
+      "name": "test_add_bitfield_characteristic",
+      "description": "测试添加 bitfield 变量为 CHARACTERISTIC，验证 BIT_MASK 生成",
+      "priority": "critical",
+      "related_issue": "#20",
+      "preconditions": ["已加载包含 bitfield 的 ELF 数据包", "已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "call_mock", "function": "setMockElfEntries", "args": {"entries": "bitfieldEntries"} },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row[data-bitfield='true']:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row[data-bitfield='true']:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('标定')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已添加" }
+      ],
+      "expected_result": "生成的 CHARACTERISTIC 块包含 BIT_MASK 字段",
+      "validation": {
+        "type": "output_format",
+        "pattern": "BIT_MASK 0x[0-9A-Fa-f]+"
+      },
+      "mock_requirements": ["generate_characteristic_block with BIT_MASK"]
+    },
+    {
+      "id": "TC-BITFIELD-003",
+      "suite": "TS-BITFIELD",
+      "name": "test_bitfield_mask_calculation",
+      "description": "测试 BIT_MASK 计算正确性",
+      "priority": "critical",
+      "related_issue": "#19-20",
+      "preconditions": [],
+      "steps": [
+        { "action": "call_mock", "function": "setMockElfEntries", "args": {"entries": "specificBitfieldEntries"} },
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row[data-bit-offset='4'][data-bit-size='3']" },
+        { "action": "contextmenu", "target": ".panel-right .list .row[data-bit-offset='4'][data-bit-size='3']" },
+        { "action": "click", "target": ".context-menu button:has-text('观测')" },
+        { "action": "wait", "duration": 300 }
+      ],
+      "expected_result": "BIT_MASK = ((1 << bit_size) - 1) << bit_offset = 0x70",
+      "validation": {
+        "type": "mock_state",
+        "check": "last_generated_block contains BIT_MASK 0x70"
+      },
+      "mock_requirements": ["calculate_bit_mask"]
+    },
+    {
+      "id": "TC-REG-001",
+      "suite": "TS-REGRESSION",
+      "name": "test_normal_add_variable",
+      "description": "回归测试：普通变量添加功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 ELF 数据包", "已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-right .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('观测')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已添加" }
+      ],
+      "expected_result": "普通变量正确添加到 A2L",
+      "mock_requirements": ["export_entries"]
+    },
+    {
+      "id": "TC-REG-002",
+      "suite": "TS-REGRESSION",
+      "name": "test_normal_edit_variable",
+      "description": "回归测试：普通变量编辑功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "wait_for_selector", "target": ".editor", "timeout": 2000 },
+        { "action": "fill", "target": ".editor .field-input:first-of-type", "value": "EditedVarName" },
+        { "action": "click", "target": ".editor button:has-text('保存')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已保存" }
+      ],
+      "expected_result": "变量名称正确修改",
+      "mock_requirements": ["save_a2l_changes"]
+    },
+    {
+      "id": "TC-REG-003",
+      "suite": "TS-REGRESSION",
+      "name": "test_normal_delete_variable",
+      "description": "回归测试：普通变量删除功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "contextmenu", "target": ".panel-left .list .row:first-child" },
+        { "action": "click", "target": ".context-menu button:has-text('删除')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已删除" }
+      ],
+      "expected_result": "变量正确删除",
+      "mock_requirements": ["delete_variables"]
+    },
+    {
+      "id": "TC-REG-004",
+      "suite": "TS-REGRESSION",
+      "name": "test_search_functionality",
+      "description": "回归测试：搜索功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 ELF 数据包"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "fill", "target": ".panel-right .search-bar input", "value": "variable" },
+        { "action": "wait", "duration": 500 },
+        { "action": "assert", "target": ".panel-right .footer", "expect": "text:显示" }
+      ],
+      "expected_result": "搜索结果正确过滤",
+      "mock_requirements": ["search_elf_entries"]
+    },
+    {
+      "id": "TC-REG-005",
+      "suite": "TS-REGRESSION",
+      "name": "test_sort_functionality",
+      "description": "回归测试：排序功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 ELF 数据包"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .table-header .sortable:first-child" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".panel-right .table-header .sortable:first-child", "expect": "text:▼" }
+      ],
+      "expected_result": "排序指示器正确显示",
+      "mock_requirements": ["search_elf_entries"]
+    },
+    {
+      "id": "TC-REG-006",
+      "suite": "TS-REGRESSION",
+      "name": "test_multi_select_ctrl_click",
+      "description": "回归测试：Ctrl+点击多选功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 ELF 数据包"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-right .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-right .list .row:nth-child(1)" },
+        { "action": "click", "target": ".panel-right .list .row:nth-child(2)", "modifiers": ["Control"] },
+        { "action": "click", "target": ".panel-right .list .row:nth-child(3)", "modifiers": ["Control"] },
+        { "action": "assert", "target": ".panel-right .list .row.selected", "expect": "count:3" }
+      ],
+      "expected_result": "多选功能正常",
+      "mock_requirements": []
+    },
+    {
+      "id": "TC-REG-007",
+      "suite": "TS-REGRESSION",
+      "name": "test_batch_delete",
+      "description": "回归测试：批量删除功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .list .row:nth-child(1)" },
+        { "action": "click", "target": ".panel-left .list .row:nth-child(2)", "modifiers": ["Control"] },
+        { "action": "contextmenu", "target": ".panel-left .list .row:nth-child(2)" },
+        { "action": "click", "target": ".context-menu button:has-text('删除')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已删除 2" }
+      ],
+      "expected_result": "批量删除功能正常",
+      "mock_requirements": ["delete_variables"]
+    },
+    {
+      "id": "TC-REG-008",
+      "suite": "TS-REGRESSION",
+      "name": "test_data_type_change",
+      "description": "回归测试：数据类型修改功能正常",
+      "priority": "high",
+      "preconditions": ["已加载 A2L 文件"],
+      "steps": [
+        { "action": "goto", "target": "/" },
+        { "action": "wait_for_selector", "target": ".panel-left .list .row", "timeout": 5000 },
+        { "action": "click", "target": ".panel-left .list .row:first-child" },
+        { "action": "wait_for_selector", "target": ".editor select", "timeout": 2000 },
+        { "action": "select_option", "target": ".editor select:first-of-type", "value": "FLOAT32_IEEE" },
+        { "action": "click", "target": ".editor button:has-text('保存')" },
+        { "action": "wait", "duration": 300 },
+        { "action": "assert", "target": ".status-bar", "expect": "text:已保存" }
+      ],
+      "expected_result": "数据类型正确修改",
+      "mock_requirements": ["save_a2l_changes"]
     }
   ],
-  "test_suites": [
-    {
-      "id": "TS-SMOKE",
-      "name": "冒烟测试",
-      "description": "基本功能验证 - 确保应用可启动和核心功能可用 (迭代2扩展: 添加导出/编辑/保存测试)",
-      "test_cases": [
-        "TC-FILE-001",
-        "TC-FILE-005",
-        "TC-SEARCH-001",
-        "TC-SELECT-001",
-        "TC-UI-001",
-        "TC-EXPORT-001",
-        "TC-EXPORT-002",
-        "TC-EDIT-001",
-        "TC-EDIT-002",
-        "TC-FILE-006",
-        "TC-DELETE-001",
-        "TC-UI-005"
-      ],
-      "execution_order": "sequential",
-      "setup_data": {
-        "load_package": true,
-        "load_a2l": true
-      },
-      "coverage_target": {
-        "min_tests": 12,
-        "coverage_percentage": "30%"
-      },
-      "notes": "迭代2更新: 从5个用例扩展到12个用例，覆盖导出/编辑/保存/删除核心功能"
-    },
-    {
-      "id": "TS-FILE-OPERATIONS",
-      "name": "文件操作测试",
-      "description": "文件加载、保存相关测试",
-      "test_cases": [
-        "TC-FILE-001",
-        "TC-FILE-002",
-        "TC-FILE-003",
-        "TC-FILE-004",
-        "TC-FILE-005",
-        "TC-FILE-006",
-        "TC-FILE-007",
-        "TC-FILE-008"
-      ]
-    },
-    {
-      "id": "TS-EDIT-WORKFLOW",
-      "name": "编辑工作流测试",
-      "description": "完整的编辑-保存工作流",
-      "test_cases": [
-        "TC-FILE-001",
-        "TC-FILE-005",
-        "TC-EDIT-001",
-        "TC-EDIT-002",
-        "TC-EDIT-003",
-        "TC-FILE-006"
-      ]
-    },
-    {
-      "id": "TS-EXPORT-WORKFLOW",
-      "name": "导出工作流测试",
-      "description": "从 ELF 导出到 A2L 的完整流程",
-      "test_cases": [
-        "TC-FILE-001",
-        "TC-FILE-005",
-        "TC-SELECT-002",
-        "TC-EXPORT-001",
-        "TC-EXPORT-002",
-        "TC-FILE-006"
-      ]
-    }
-  ],
-  "metadata": {
-    "total_test_cases": 40,
-    "categories": 8,
-    "suites": 4,
-    "last_updated": "2026-02-17",
-    "iteration": "4 (纠正前置条件问题)",
-    "coverage_progress": {
-      "previous": {
-        "executed": 7,
-        "total": 40,
-        "percentage": "17.5%"
-      },
-      "current": {
-        "target_tests": 12,
-        "target_percentage": "30%"
-      },
-      "missing_functions": {
-        "export": ["TC-EXPORT-001", "TC-EXPORT-002", "TC-EXPORT-003", "TC-EXPORT-004"],
-        "edit": ["TC-EDIT-001", "TC-EDIT-002", "TC-EDIT-003", "TC-EDIT-004", "TC-EDIT-005"],
-        "delete": ["TC-DELETE-001", "TC-DELETE-002", "TC-DELETE-003"]
-      }
-    },
-    "change_log": [
-      {
-        "date": "2026-02-17",
-        "iteration": 4,
-        "changes": [
-          "修复 TC-FILE-007: 增加编辑变量步骤(step 1-4)以创建未保存的更改，满足前置条件",
-          "修复 TC-SELECT-001: 增加清除搜索框步骤(step 1-2)，解决前序测试 TC-SEARCH-001 残留搜索关键词问题",
-          "修复 TC-EXPORT-001: 增加清除搜索框和数据验证步骤(step 1-4)，解决继承空列表状态问题",
-          "修复 TC-DELETE-003: 增加删除变量步骤(step 1-5)以创建删除标记，满足前置条件"
-        ]
-      },
-      {
-        "date": "2026-02-17",
-        "iteration": 2,
-        "changes": [
-          "扩展 TS-SMOKE 测试套件从5个用例到12个用例",
-          "添加导出功能测试: TC-EXPORT-001, TC-EXPORT-002 (Critical)",
-          "添加编辑功能测试: TC-EDIT-001, TC-EDIT-002 (High)",
-          "添加保存功能测试: TC-FILE-006 (Critical)",
-          "添加删除功能测试: TC-DELETE-001 (High)",
-          "添加快捷键测试: TC-UI-005 (Ctrl+S 保存)",
-          "目标覆盖率从17.5%提升到30%"
-        ]
-      },
-      {
-        "date": "2026-02-17",
-        "iteration": 1,
-        "changes": [
-          "更新 TC-SELECT-001 增加表格渲染等待步骤",
-          "为所有测试用例添加详细的 selector",
-          "添加 validation 配置",
-          "添加 notes 和 workaround_for_previous_failure 字段"
-        ]
-      }
+
+  "test_data": {
+    "newFormatVariables": [
+      { "name": "new_format_var_001", "address": "0x20010000", "data_type": "ULONG", "var_type": "MEASUREMENT" },
+      { "name": "new_format_var_002", "address": "0x20010004", "data_type": "FLOAT32_IEEE", "var_type": "CHARACTERISTIC" }
+    ],
+    "bitfieldEntries": [
+      { "index": 0, "full_name": "bitfield_var_001", "address": 0x20000000, "size": 4, "a2l_type": "UBYTE", "type_name": "uint8_t", "bit_offset": 0, "bit_size": 3 },
+      { "index": 1, "full_name": "bitfield_var_002", "address": 0x20000000, "size": 4, "a2l_type": "UBYTE", "type_name": "uint8_t", "bit_offset": 3, "bit_size": 2 },
+      { "index": 2, "full_name": "bitfield_var_003", "address": 0x20000000, "size": 4, "a2l_type": "UWORD", "type_name": "uint16_t", "bit_offset": 8, "bit_size": 4 }
+    ],
+    "specificBitfieldEntries": [
+      { "index": 0, "full_name": "test_bitfield_calc", "address": 0x20000000, "size": 4, "a2l_type": "UBYTE", "type_name": "uint8_t", "bit_offset": 4, "bit_size": 3 }
     ]
+  },
+
+  "mock_requirements": {
+    "commands": [
+      "load_elf",
+      "load_package", 
+      "load_a2l",
+      "search_elf_entries",
+      "search_a2l_variables",
+      "export_entries",
+      "delete_variables",
+      "save_a2l_changes",
+      "set_endianness"
+    ],
+    "special_data": [
+      "bitfield entries with bit_offset and bit_size",
+      "new format A2L variables"
+    ]
+  },
+
+  "metadata": {
+    "total_test_cases": 20,
+    "suites": 4,
+    "critical_cases": 12,
+    "high_cases": 8,
+    "estimated_time": "15-25 minutes",
+    "coverage": {
+      "selection_fix": "100%",
+      "output_format_fix": "100%",
+      "bitfield_support": "100%",
+      "regression": "80%"
+    }
   }
 }

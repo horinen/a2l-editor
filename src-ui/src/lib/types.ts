@@ -14,6 +14,7 @@ export interface A2lVariable {
   address: string | null;
   data_type: string;
   var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
+  bit_mask: string | null;
 }
 
 export interface LoadResult {
@@ -52,6 +53,7 @@ export interface A2lVariableEdit {
   address?: string;
   data_type?: string;
   var_type?: 'MEASUREMENT' | 'CHARACTERISTIC';
+  bit_mask?: string;
   entry?: A2lEntry;
   exportMode?: ExportMode;
 }
