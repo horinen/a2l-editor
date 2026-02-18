@@ -1,9 +1,9 @@
 <script lang="ts">
   import { 
     a2lVariables, a2lSearchQuery, a2lSelectedIndices, toggleA2lSelection,
-    a2lSortConfigs, toggleSort, applySorting, parseAddress, pendingChanges
+    a2lSortConfigs, toggleSort, applySorting, parseAddress
   } from '$lib/stores';
-  import type { A2lVariable, A2lVariableEdit } from '$lib/types';
+  import type { A2lVariable } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
   import { debounce } from '$lib/utils/debounce';
   import VirtualList from './VirtualList.svelte';
@@ -219,15 +219,6 @@
   function getVarTypeLabel(varType: string): string {
     return varType === 'CHARACTERISTIC' ? '标定' : '观测';
   }
-
-  function getRowChangeClass(variable: A2lVariable): string {
-    const change = $pendingChanges.find(c => c.originalName === variable.name);
-    if (change) {
-      if (change.action === 'delete') return 'deleted';
-      if (change.action === 'modify') return 'modified';
-    }
-    return '';
-  }
 </script>
 
 <div class="panel" onkeydown={handleKeydown} tabindex="0">
@@ -271,10 +262,9 @@
       {#snippet children(variable: A2lVariable, i: number)}
         {@const isSelected = $a2lSelectedIndices.has(i)}
         {@const isHovered = hoveredIndex === i}
-        {@const changeClass = getRowChangeClass(variable)}
         
         <div 
-          class="row {changeClass}"
+          class="row"
           class:selected={isSelected}
           class:hovering={isHovered}
           class:focused={focusedIndex === i}
@@ -415,36 +405,6 @@
   .row.focused {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
-  }
-
-  /* 修改标记样式 */
-  .row.modified {
-    border-left-color: #f59e0b;
-    background: rgba(245, 158, 11, 0.08);
-  }
-
-  .row.modified:hover, .row.modified.hovering {
-    background: rgba(245, 158, 11, 0.15);
-  }
-
-  .row.modified.selected {
-    background: rgba(245, 158, 11, 0.2);
-    border-left-color: #f59e0b;
-  }
-
-  /* 删除标记样式 */
-  .row.deleted {
-    border-left-color: #ef4444;
-    background: rgba(239, 68, 68, 0.08);
-  }
-
-  .row.deleted:hover, .row.deleted.hovering {
-    background: rgba(239, 68, 68, 0.15);
-  }
-
-  .row.deleted.selected {
-    background: rgba(239, 68, 68, 0.2);
-    border-left-color: #ef4444;
   }
 
   .col-icon {

@@ -1,52 +1,19 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
-  import { currentTheme, hasUnsavedChanges, pendingChanges, a2lPath, endianness } from '$lib/stores';
+  import { currentTheme, a2lPath, endianness } from '$lib/stores';
   import { themes, themeNames, applyTheme, cycleTheme } from '$lib/themes';
-  import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading, clearPendingChanges } from '$lib/stores';
+  import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading } from '$lib/stores';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { loadElf, loadPackage, loadA2l, saveA2lChanges, setEndianness } from '$lib/commands';
+  import { loadElf, loadPackage, loadA2l, setEndianness } from '$lib/commands';
   import { 
     elfPath, elfFileName, elfTotalCount, elfEntries,
-    packagePath, a2lVariables, a2lNames,
-    showExportDialog, exportPreview
+    packagePath, a2lVariables, a2lNames
   } from '$lib/stores';
   import { searchA2lVariables } from '$lib/commands';
 
   let showMenu = $state(false);
-  let isSaving = $state(false);
 
   const VERSION = 'v0.1.0';
-
-  async function handleSave() {
-    if (!$hasUnsavedChanges || !$a2lPath || isSaving) return;
-    
-    isSaving = true;
-    statusMessage.set('⏳ 正在保存...');
-    
-    try {
-      const changes = $pendingChanges;
-      const result = await saveA2lChanges(changes);
-      
-      const total = result.modified + result.deleted + result.added;
-      statusMessage.set(`✅ 已保存 ${total} 个更改 (修改:${result.modified} 删除:${result.deleted} 添加:${result.added})`);
-      
-      clearPendingChanges();
-      
-      const vars = await searchA2lVariables('', 0, 10000);
-      a2lVariables.set(vars);
-    } catch (e) {
-      statusMessage.set(`❌ 保存失败: ${e}`);
-    }
-    
-    isSaving = false;
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-      e.preventDefault();
-      handleSave();
-    }
-  }
 
   async function handleOpenElf() {
     const selected = await open({
@@ -148,7 +115,7 @@
   }
 </script>
 
-<svelte:window onclick={() => showMenu = false} onkeydown={handleKeydown} />
+<svelte:window onclick={() => showMenu = false} />
 
 <header class="header">
   <div class="left">
@@ -170,29 +137,6 @@
     <button class="icon-btn" onclick={() => showAboutDialog.set(true)}>ℹ️ 关于</button>
   </div>
   <div class="right">
-    {#if $a2lPath}
-      <button 
-        class="save-btn" 
-        class:has-changes={$hasUnsavedChanges}
-        class:saving={isSaving}
-        onclick={handleSave}
-        disabled={!$hasUnsavedChanges || isSaving}
-        title="保存 (Ctrl+S)"
-      >
-        💾 保存
-        {#if $hasUnsavedChanges}
-          <span class="badge">{$pendingChanges.length}</span>
-        {/if}
-      </button>
-      <button 
-        class="reset-btn" 
-        onclick={clearPendingChanges}
-        disabled={!$hasUnsavedChanges}
-        title="重置所有变更"
-      >
-        ↩️ 重置
-      </button>
-    {/if}
     <button class="icon-btn endianness-btn" onclick={handleToggleEndianness} title="切换字节序">
       {$endianness === 'little' ? '小端' : '大端'}
     </button>
@@ -234,82 +178,6 @@
 
   .menu-btn:hover, .icon-btn:hover {
     background: var(--bg-hover);
-  }
-
-  .save-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 13px;
-    transition: all 0.2s;
-  }
-
-  .save-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  .save-btn.has-changes {
-    color: var(--text);
-    border-color: var(--accent);
-  }
-
-  .save-btn.has-changes:hover:not(:disabled) {
-    background: var(--accent);
-    color: white;
-  }
-
-  .save-btn.saving {
-    opacity: 0.7;
-    cursor: wait;
-  }
-
-  .save-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 4px;
-    background: var(--accent);
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 9px;
-  }
-
-  .reset-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 12px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 13px;
-    transition: all 0.2s;
-  }
-
-  .reset-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-
-  .reset-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
   }
 
   .menu {

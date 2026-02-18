@@ -2,16 +2,15 @@
   import { derived } from 'svelte/store';
   import { 
     elfPath, elfSelectedIndices, a2lPath, 
-    a2lSelectedIndices, statusMessage, hasUnsavedChanges, changeCount
+    a2lSelectedIndices, statusMessage
   } from '$lib/stores';
 
   const hint = derived(
-    [elfPath, elfSelectedIndices, a2lPath, a2lSelectedIndices, statusMessage, hasUnsavedChanges, changeCount],
-    ([$elfPath, $elfSelected, $a2lPath, $a2lSelected, $status, $hasUnsaved, $changeCount]) => {
+    [elfPath, elfSelectedIndices, a2lPath, a2lSelectedIndices, statusMessage],
+    ([$elfPath, $elfSelected, $a2lPath, $a2lSelected, $status]) => {
       if ($status && !$status.startsWith('💡')) return $status;
       
       if (!$elfPath) return '💡 文件 → 打开 ELF 开始使用';
-      if ($hasUnsaved) return `⚠️ 有 ${$changeCount} 个未保存的更改 (Ctrl+S 保存)`;
       if ($a2lSelected.size > 0) return '💡 右键 → 删除所选变量';
       if ($elfSelected.size > 0 && !$a2lPath) return '⚠️ 请先选择目标 A2L 文件';
       if ($elfSelected.size > 0) return '💡 右键 → 添加为观测/标定变量';
@@ -20,7 +19,7 @@
   );
 </script>
 
-<div class="status-bar" class:has-unsaved={$hasUnsavedChanges}>{$hint}</div>
+<div class="status-bar">{$hint}</div>
 
 <style>
   .status-bar {
@@ -29,10 +28,5 @@
     border-top: 1px solid var(--border);
     font-size: 13px;
     color: var(--text-muted);
-  }
-
-  .status-bar.has-unsaved {
-    color: #f59e0b;
-    background: rgba(245, 158, 11, 0.05);
   }
 </style>

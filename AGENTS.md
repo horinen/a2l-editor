@@ -82,37 +82,19 @@ a2l-editor/
 ### A2L 变量编辑
 - 在 A2L 面板下方有可拖拽调整大小的编辑区域
 - 选中单个变量后可编辑：名称、地址、数据类型、变量类型
-- 修改自动加入待保存队列，立即生效
+- 点击"保存"按钮立即写入 A2L 文件
+- 点击"重置"按钮恢复为原始值
 
-### 延迟保存机制
-- 所有操作（编辑、添加、删除）先加入 `pendingChanges` 队列
-- 统一通过 `save_a2l_changes` 命令批量保存
-- 关闭程序时如有未保存更改会弹出确认对话框
-- 重置按钮可清空所有待保存变更
-
-### 修改标记
-- 🟠 橙色边框：修改的变量
-- 🔴 红色边框：待删除的变量
-- 状态栏显示未保存更改数量
+### 实时保存
+- 所有操作（编辑、添加、删除）立即写入文件
+- 编辑变量：点击保存按钮后立即生效
+- 添加变量：右键添加后立即写入
+- 删除变量：右键删除后立即生效
 
 ### 字节序设置
 - Header 右侧有"小端/大端"切换按钮
 - 全局设置，存储在后端 AppState.endianness
 - 不持久化，每次启动默认小端
-
-## Tauri 2.x 权限配置
-
-窗口操作需要在 `capabilities/default.json` 中声明：
-```json
-{
-  "permissions": [
-    "core:default",
-    "core:window:allow-close",
-    "core:window:allow-destroy",
-    "core:window:allow-start-dragging"
-  ]
-}
-```
 
 ## Rust 代码风格
 
@@ -216,7 +198,7 @@ export interface A2lEntry {
 
 export type ExportMode = 'measurement' | 'characteristic';
 
-// 编辑操作类型
+// 编辑操作类型（用于 saveA2lChanges）
 export type EditActionType = 'modify' | 'delete' | 'add';
 
 export interface A2lVariableEdit {
@@ -237,8 +219,7 @@ export interface A2lVariableEdit {
   let count = $state(0);
   let doubled = $derived(count * 2);
   
-  // 使用 $effect.pre 避免循环依赖
-  $effect.pre(() => {
+  $effect(() => {
     console.log('count changed:', count);
   });
 </script>
@@ -248,13 +229,11 @@ export interface A2lVariableEdit {
 ```typescript
 // 定义 store
 export const elfEntries = writable<A2lEntry[]>([]);
-export const pendingChanges = writable<A2lVariableEdit[]>([]);
-export const hasUnsavedChanges = derived(pendingChanges, $c => $c.length > 0);
 export const endianness = writable<'little' | 'big'>('little');
 
 // 在组件中使用
-import { elfEntries, pendingChanges, hasUnsavedChanges } from '$lib/stores';
-// $elfEntries, $pendingChanges, $hasUnsavedChanges 自动订阅
+import { elfEntries, endianness } from '$lib/stores';
+// $elfEntries, $endianness 自动订阅
 ```
 
 ### 异步函数
@@ -286,7 +265,7 @@ pub fn save_a2l_changes(
     edits: Vec<VariableEditInput>,
     state: State<Mutex<AppState>>,
 ) -> Result<SaveResult, String> {
-    // 统一处理修改、删除、添加操作
+    // 处理修改变量操作
 }
 
 #[tauri::command]
@@ -310,20 +289,6 @@ export async function searchElfEntries(
   return invoke('search_elf_entries', { query, offset, limit, sortField, sortOrder });
 }
 ```
-
-### 窗口关闭拦截
-后端通过 `on_window_event` 拦截关闭事件，前端监听 `close-requested` 事件：
-```typescript
-appWindow.listen('close-requested', async () => {
-  if ($hasUnsavedChanges) {
-    // 显示确认对话框
-  } else {
-    await appWindow.destroy();  // 注意：使用 destroy() 而非 close()
-  }
-});
-```
-
-**重要**：必须使用 `destroy()` 而非 `close()`，否则会再次触发 `close-requested` 事件导致死循环。
 
 ## 测试
 

@@ -9,7 +9,9 @@
     "build": "npm run build --workspace=src-ui",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "test:browser": "cd src-ui && vite --config vite.test.config.ts",
+    "test:browser:preview": "cd src-ui && vite build --config vite.test.config.ts && vite preview --port 5174"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

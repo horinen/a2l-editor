@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A2L Editor - Test Mode</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f12;
+      color: #e4e4e7;
+    }
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #27272a;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div>Loading Test Environment...</div>
+  </div>
+
+  <!-- Mock Tauri API -->
+  <script>
+    // ============================================================
+    // Mock State
+    // ============================================================
+
+    const mockState = {
+      elfEntries: [],
+      a2lVariables: [],
+      elfPath: null,
+      a2lPath: null,
+      a2lNames: new Set(),
+      endianness: 'little',
+      packageMeta: null,
+    };
+
+    // ============================================================
+    // Mock Data Generators
+    // ============================================================
+
+    function generateMockElfEntries(count = 1000) {
+      const types = ['SCALAR', 'ARRAY', 'STRUCT'];
+      const dataTypes = ['uint8', 'uint16', 'uint32', 'int8', 'int16', 'int32', 'float', 'double'];
+      const prefixes = ['app_', 'sys_', 'drv_', 'cal_', 'meas_', 'diag_', 'ctrl_', 'sensor_', 'actuator_'];
+
+      const entries = [];
+      for (let i = 0; i < count; i++) {
+        const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+        entries.push({
+          index: i,
+          full_name: prefix + 'variable_' + String(i).padStart(4, '0'),
+          address: 0x20000000 + Math.floor(Math.random() * 0x1000000),
+          size: Math.pow(2, Math.floor(Math.random() * 4)),
+          a2l_type: types[Math.floor(Math.random() * types.length)],
+          type_name: dataTypes[Math.floor(Math.random() * dataTypes.length)],
+          bit_offset: Math.random() > 0.9 ? Math.floor(Math.random() * 32) : null,
+          bit_size: Math.random() > 0.9 ? Math.floor(Math.random() * 8) + 1 : null,
+        });
+      }
+      return entries;
+    }
+
+    function generateMockA2lVariables(count = 500, elfEntries = null) {
+      const dataTypes = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
+      const varTypes = ['MEASUREMENT', 'CHARACTERISTIC'];
+
+      const variables = [];
+      const useElfNames = elfEntries && elfEntries.length > 0;
+      const elfNameCount = useElfNames ? Math.min(Math.floor(count * 0.3), elfEntries.length) : 0;
+
+      for (let i = 0; i < elfNameCount; i++) {
+        const entry = elfEntries[i];
+        variables.push({
+          name: entry.full_name,
+          address: '0x' + entry.address.toString(16).toUpperCase().padStart(8, '0'),
+          data_type: dataTypes[Math.floor(Math.random() * dataTypes.length)],
+          var_type: varTypes[Math.floor(Math.random() * varTypes.length)],
+        });
+      }
+
+      const prefixes = ['existing_', 'old_', 'legacy_', 'custom_'];
+      for (let i = elfNameCount; i < count; i++) {
+        const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+        variables.push({
+          name: prefix + 'variable_' + String(i).padStart(4, '0'),
+          address: '0x' + (0x20000000 + Math.floor(Math.random() * 0x1000000)).toString(16).toUpperCase().padStart(8, '0'),
+          data_type: dataTypes[Math.floor(Math.random() * dataTypes.length)],
+          var_type: varTypes[Math.floor(Math.random() * varTypes.length)],
+        });
+      }
+
+      return variables;
+    }
+
+    // Initialize mock data
+    mockState.elfEntries = generateMockElfEntries(1000);
+    mockState.a2lVariables = generateMockA2lVariables(500, mockState.elfEntries);
+
+    // ============================================================
+    // Mock Invoke
+    // ============================================================
+
+    async function mockInvoke(cmd, args = {}) {
+      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
+
+      switch (cmd) {
+        case 'load_elf':
+        case 'load_package': {
+          mockState.elfPath = args.path.replace('.a2ldata', '.elf');
+          mockState.packageMeta = {
+            file_name: args.path.split('/').pop().replace('.a2ldata', '.elf'),
+            elf_path: mockState.elfPath,
+            entry_count: mockState.elfEntries.length,
+            created_at: Date.now() - Math.floor(Math.random() * 86400000 * 30),
+          };
+          return { meta: mockState.packageMeta, entry_count: mockState.elfEntries.length };
+        }
+
+        case 'generate_package': {
+          mockState.elfPath = args.elfPath;
+          mockState.packageMeta = {
+            file_name: args.elfPath.split('/').pop(),
+            elf_path: args.elfPath,
+            entry_count: mockState.elfEntries.length,
+            created_at: Date.now(),
+          };
+          return mockState.packageMeta;
+        }
+
+        case 'load_a2l': {
+          mockState.a2lPath = args.path;
+          mockState.a2lNames = new Set(mockState.a2lVariables.map(v => v.name));
+          return {
+            path: args.path,
+            variable_count: mockState.a2lVariables.length,
+            existing_names: Array.from(mockState.a2lNames),
+          };
+        }
+
+        case 'search_elf_entries': {
+          let results = mockState.elfEntries;
+          if (args.query) {
+            const q = args.query.toLowerCase();
+            results = results.filter(e => e.full_name.toLowerCase().includes(q));
+          }
+          results = [...results].sort((a, b) => {
+            const cmp = args.sortField === 'address'
+              ? a.address - b.address
+              : a.full_name.localeCompare(b.full_name);
+            return args.sortOrder === 'desc' ? -cmp : cmp;
+          });
+          return results.slice(args.offset || 0, (args.offset || 0) + (args.limit || 10000));
+        }
+
+        case 'get_elf_count':
+          return mockState.elfEntries.length;
+
+        case 'search_a2l_variables': {
+          let results = mockState.a2lVariables;
+          if (args.query) {
+            const q = args.query.toLowerCase();
+            results = results.filter(v => v.name.toLowerCase().includes(q));
+          }
+          return results.slice(args.offset || 0, (args.offset || 0) + (args.limit || 10000));
+        }
+
+        case 'export_entries': {
+          const result = { added: 0, skipped: 0, existing: 0 };
+          for (const idx of args.indices) {
+            const entry = mockState.elfEntries.find(e => e.index === idx);
+            if (!entry) continue;
+            if (mockState.a2lNames.has(entry.full_name)) {
+              result.existing++;
+            } else {
+              mockState.a2lVariables.push({
+                name: entry.full_name,
+                address: '0x' + entry.address.toString(16).toUpperCase().padStart(8, '0'),
+                data_type: 'UBYTE',
+                var_type: args.mode === 'measurement' ? 'MEASUREMENT' : 'CHARACTERISTIC',
+              });
+              mockState.a2lNames.add(entry.full_name);
+              result.added++;
+            }
+          }
+          return result;
+        }
+
+        case 'delete_variables': {
+          const namesToDelete = args.indices.map(i => mockState.a2lVariables[i]?.name).filter(Boolean);
+          mockState.a2lVariables = mockState.a2lVariables.filter(v => !namesToDelete.includes(v.name));
+          mockState.a2lNames = new Set(mockState.a2lVariables.map(v => v.name));
+          return namesToDelete.length;
+        }
+
+        case 'save_a2l_changes': {
+          const result = { modified: 0, deleted: 0, added: 0, skipped: 0 };
+          for (const edit of args.edits) {
+            if (edit.action === 'delete') {
+              const idx = mockState.a2lVariables.findIndex(v => v.name === edit.original_name);
+              if (idx >= 0) {
+                mockState.a2lVariables.splice(idx, 1);
+                result.deleted++;
+              }
+            } else if (edit.action === 'modify') {
+              const variable = mockState.a2lVariables.find(v => v.name === edit.original_name);
+              if (variable) {
+                if (edit.name) variable.name = edit.name;
+                if (edit.address) variable.address = edit.address;
+                if (edit.data_type) variable.data_type = edit.data_type;
+                if (edit.var_type) variable.var_type = edit.var_type;
+                result.modified++;
+              }
+            } else if (edit.action === 'add') {
+              if (edit.entry && !mockState.a2lNames.has(edit.original_name)) {
+                mockState.a2lVariables.push({
+                  name: edit.entry.full_name,
+                  address: '0x' + edit.entry.address.toString(16).toUpperCase().padStart(8, '0'),
+                  data_type: 'UBYTE',
+                  var_type: edit.export_mode === 'characteristic' ? 'CHARACTERISTIC' : 'MEASUREMENT',
+                });
+                mockState.a2lNames.add(edit.entry.full_name);
+                result.added++;
+              } else {
+                result.skipped++;
+              }
+            }
+          }
+          mockState.a2lNames = new Set(mockState.a2lVariables.map(v => v.name));
+          return result;
+        }
+
+        case 'set_endianness': {
+          mockState.endianness = args.endianness;
+          return;
+        }
+
+        default:
+          throw new Error('Unknown command: ' + cmd);
+      }
+    }
+
+    // ============================================================
+    // Setup Tauri Mock
+    // ============================================================
+
+    // Create mock Tauri object BEFORE any module loading
+    window.__TAURI__ = {
+      invoke: mockInvoke,
+      core: { invoke: mockInvoke }
+    };
+
+    // Mock dialog plugin
+    window.__TAURI_DIALOG__ = {
+      open: async (options = {}) => {
+        if (window.__mock_dialog_result__ !== undefined) {
+          return window.__mock_dialog_result__;
+        }
+        if (options.filters?.[0]?.extensions?.includes('a2ldata')) {
+          return '/mock/path/test.elf.a2ldata';
+        }
+        if (options.filters?.[0]?.extensions?.includes('a2l')) {
+          return '/mock/path/test.a2l';
+        }
+        return '/mock/path/test.elf';
+      },
+      save: async (options = {}) => {
+        return options.defaultPath || '/mock/path/save.a2l';
+      }
+    };
+
+    // Mock clipboard plugin
+    window.__TAURI_CLIPBOARD__ = {
+      writeText: async (text) => {
+        mockState._lastClipboardText = text;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (e) {}
+      },
+      readText: async () => {
+        try {
+          return await navigator.clipboard.readText();
+        } catch (e) {
+          return mockState._lastClipboardText || '';
+        }
+      }
+    };
+
+    // Mock window API
+    window.__TAURI_WINDOW__ = {
+      getCurrentWindow: () => ({
+        listen: (event, callback) => {
+          if (!mockState._eventListeners) mockState._eventListeners = {};
+          mockState._eventListeners[event] = callback;
+          return Promise.resolve(() => { delete mockState._eventListeners[event]; });
+        },
+        destroy: async () => {},
+      })
+    };
+
+    // Mock event API
+    window.__TAURI_EVENT__ = {
+      listen: (event, callback) => {
+        if (!mockState._eventListeners) mockState._eventListeners = {};
+        mockState._eventListeners[event] = callback;
+        return Promise.resolve(() => { delete mockState._eventListeners[event]; });
+      }
+    };
+
+    // Test helpers
+    window.__test_loadFiles__ = async function(pkgPath, a2lPath) {
+      const debug = { pkgPath, a2lPath };
+      try {
+        if (pkgPath) {
+          const result = await mockInvoke('load_package', { path: pkgPath });
+          debug.packageResult = result;
+          debug.entriesCount = mockState.elfEntries.length;
+        }
+        if (a2lPath) {
+          const result = await mockInvoke('load_a2l', { path: a2lPath });
+          debug.a2lResult = { variable_count: result.variable_count };
+          debug.a2lVarsCount = mockState.a2lVariables.length;
+        }
+        return { success: true, debug };
+      } catch (e) {
+        return { success: false, error: e.message || String(e), debug };
+      }
+    };
+
+    window.__test_reset__ = function() {
+      mockState.elfEntries = generateMockElfEntries(1000);
+      mockState.a2lVariables = generateMockA2lVariables(500, mockState.elfEntries);
+      mockState.elfPath = null;
+      mockState.a2lPath = null;
+      mockState.a2lNames = new Set();
+      mockState.packageMeta = null;
+    };
+
+    window.__mock_state__ = mockState;
+
+    console.log('[Test Mode] Mock Tauri API initialized');
+  </script>
+
+  <!-- Load the main app -->
+  <script type="module">
+    // Intercept dynamic imports to replace Tauri modules
+    const originalImport = window.import;
+    window.import = async function(specifier) {
+      console.log('[Test Mode] Import:', specifier);
+      return originalImport.apply(this, arguments);
+    };
+
+    // Redirect to main app
+    window.location.href = '/';
+  </script>
+</body>
+</html>

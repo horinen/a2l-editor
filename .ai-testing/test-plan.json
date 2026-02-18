@@ -1,0 +1,216 @@
+{
+  "project": "a2l-editor",
+  "version": "0.2.0",
+  "description": "A2L Editor E2E 测试计划 - 更新版",
+  "created_at": "2026-02-17",
+  "updated_at": "2026-02-17",
+  "framework": "Playwright",
+  "technology_stack": ["Tauri v2", "SvelteKit", "TypeScript", "Rust"],
+
+  "test_strategy": {
+    "approach": "分层测试策略 + 数据驱动",
+    "levels": [
+      {
+        "name": "UI 组件测试",
+        "description": "测试独立组件的渲染和交互",
+        "priority": "medium",
+        "tools": ["Playwright", "Vitest"]
+      },
+      {
+        "name": "集成测试",
+        "description": "测试组件之间的协作和数据流",
+        "priority": "high",
+        "tools": ["Playwright"]
+      },
+      {
+        "name": "E2E 测试",
+        "description": "测试完整用户工作流程",
+        "priority": "critical",
+        "tools": ["Playwright"]
+      }
+    ],
+    "mock_strategy": {
+      "method": "Vite resolve.alias",
+      "target_apis": [
+        "@tauri-apps/api/core",
+        "@tauri-apps/api/event",
+        "@tauri-apps/api/window",
+        "@tauri-apps/plugin-dialog",
+        "@tauri-apps/plugin-clipboard-manager"
+      ]
+    }
+  },
+
+  "test_categories": [
+    {
+      "id": "TC-FILE",
+      "name": "文件操作",
+      "description": "ELF/A2L 文件的加载、保存、导出",
+      "priority": "critical",
+      "test_cases_count": 8,
+      "dependencies": ["loadPackage", "loadElf", "loadA2l", "generatePackage", "saveA2lChanges"]
+    },
+    {
+      "id": "TC-SEARCH",
+      "name": "搜索功能",
+      "description": "变量搜索、过滤、排序",
+      "priority": "high",
+      "test_cases_count": 6,
+      "dependencies": ["searchElfEntries", "searchA2lVariables", "getElfCount"]
+    },
+    {
+      "id": "TC-SELECT",
+      "name": "选择功能",
+      "description": "单选、多选、全选、范围选择",
+      "priority": "high",
+      "test_cases_count": 5,
+      "prerequisites": ["数据已加载", "表格已渲染"],
+      "known_issues": ["TC-SELECT-001 需要等待表格数据完全渲染"]
+    },
+    {
+      "id": "TC-EDIT",
+      "name": "编辑功能",
+      "description": "A2L 变量编辑、修改追踪",
+      "priority": "high",
+      "test_cases_count": 5,
+      "dependencies": ["A2L 数据已加载"]
+    },
+    {
+      "id": "TC-EXPORT",
+      "name": "导出功能",
+      "description": "导出到 A2L 文件",
+      "priority": "critical",
+      "test_cases_count": 4,
+      "dependencies": ["ELF 数据已加载", "A2L 目标文件已加载"]
+    },
+    {
+      "id": "TC-DELETE",
+      "name": "删除功能",
+      "description": "从 A2L 删除变量",
+      "priority": "high",
+      "test_cases_count": 3,
+      "dependencies": ["A2L 数据已加载"]
+    },
+    {
+      "id": "TC-UI",
+      "name": "UI 交互",
+      "description": "主题切换、面板调整、快捷键",
+      "priority": "medium",
+      "test_cases_count": 6,
+      "dependencies": []
+    },
+    {
+      "id": "TC-CLIPBOARD",
+      "name": "剪贴板操作",
+      "description": "复制名称和地址",
+      "priority": "medium",
+      "test_cases_count": 3,
+      "dependencies": ["数据已加载", "变量已选中"]
+    }
+  ],
+
+  "test_suites": [
+    {
+      "id": "TS-SMOKE",
+      "name": "冒烟测试",
+      "description": "基本功能验证 - 确保应用可启动和核心功能可用",
+      "priority": "critical",
+      "test_cases": [
+        "TC-FILE-001",
+        "TC-FILE-005",
+        "TC-SEARCH-001",
+        "TC-SELECT-001",
+        "TC-UI-001"
+      ],
+      "execution_order": "sequential",
+      "setup_steps": [
+        "启动开发服务器",
+        "等待应用加载完成",
+        "注入 Mock 数据"
+      ]
+    },
+    {
+      "id": "TS-FILE-OPERATIONS",
+      "name": "文件操作测试",
+      "description": "文件加载、保存相关测试",
+      "priority": "critical",
+      "test_cases": [
+        "TC-FILE-001",
+        "TC-FILE-002",
+        "TC-FILE-003",
+        "TC-FILE-004",
+        "TC-FILE-005",
+        "TC-FILE-006",
+        "TC-FILE-007",
+        "TC-FILE-008"
+      ]
+    },
+    {
+      "id": "TS-EDIT-WORKFLOW",
+      "name": "编辑工作流测试",
+      "description": "完整的编辑-保存工作流",
+      "priority": "high",
+      "test_cases": [
+        "TC-FILE-001",
+        "TC-FILE-005",
+        "TC-EDIT-001",
+        "TC-EDIT-002",
+        "TC-EDIT-003",
+        "TC-FILE-006"
+      ]
+    },
+    {
+      "id": "TS-EXPORT-WORKFLOW",
+      "name": "导出工作流测试",
+      "description": "从 ELF 导出到 A2L 的完整流程",
+      "priority": "high",
+      "test_cases": [
+        "TC-FILE-001",
+        "TC-FILE-005",
+        "TC-SELECT-002",
+        "TC-EXPORT-001",
+        "TC-EXPORT-002",
+        "TC-FILE-006"
+      ]
+    }
+  ],
+
+  "test_environment": {
+    "mock_tauri_api": true,
+    "mock_file_system": true,
+    "test_data": {
+      "elf_entries_count": 1000,
+      "a2l_variables_count": 500
+    },
+    "timeout": {
+      "page_load": 10000,
+      "element_wait": 5000,
+      "animation_wait": 500
+    }
+  },
+
+  "known_issues": [
+    {
+      "id": "ISSUE-001",
+      "test_case": "TC-SELECT-001",
+      "description": "表格无数据行导致选择测试失败",
+      "root_cause": "数据加载后表格未及时渲染",
+      "workaround": "增加等待时间，确保 VirtualList 组件完成渲染",
+      "status": "fixed"
+    }
+  ],
+
+  "coverage_targets": {
+    "statements": 80,
+    "branches": 75,
+    "functions": 85,
+    "lines": 80
+  },
+
+  "ci_integration": {
+    "platform": "GitHub Actions",
+    "browsers": ["chromium"],
+    "parallel": true,
+    "artifacts": ["screenshots", "test-report.json"]
+  }
+}

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import { 
-    a2lVariables, a2lSelectedIndices, addPendingChange, pendingChanges, removePendingChange
+    a2lVariables, a2lSelectedIndices, statusMessage
   } from '$lib/stores';
+  import { saveA2lChanges, searchA2lVariables } from '$lib/commands';
   import type { A2lVariable, A2lVariableEdit } from '$lib/types';
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
@@ -22,7 +22,7 @@
     var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
   } | null>(null);
 
-  let hasPendingChange = $state(false);
+  let isSaving = $state(false);
 
   let selectedVariable = $derived.by(() => {
     const indices = Array.from($a2lSelectedIndices);
@@ -33,28 +33,12 @@
   // 当选中变量变化时，更新编辑缓冲区
   $effect(() => {
     if (selectedVariable) {
-      // 使用 untrack 避免追踪 pendingChanges，防止编辑时循环重置
-      const pendingChange = untrack(() => 
-        $pendingChanges.find(c => c.originalName === selectedVariable.name && c.action === 'modify')
-      );
-      
-      if (pendingChange) {
-        editBuffer = {
-          name: pendingChange.name || selectedVariable.name,
-          address: pendingChange.address || selectedVariable.address || '',
-          data_type: pendingChange.data_type || selectedVariable.data_type,
-          var_type: pendingChange.var_type || selectedVariable.var_type,
-        };
-        hasPendingChange = true;
-      } else {
-        editBuffer = {
-          name: selectedVariable.name,
-          address: selectedVariable.address || '',
-          data_type: selectedVariable.data_type,
-          var_type: selectedVariable.var_type,
-        };
-        hasPendingChange = false;
-      }
+      editBuffer = {
+        name: selectedVariable.name,
+        address: selectedVariable.address || '',
+        data_type: selectedVariable.data_type,
+        var_type: selectedVariable.var_type,
+      };
       originalValues = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
@@ -63,7 +47,6 @@
       };
     } else {
       originalValues = null;
-      hasPendingChange = false;
     }
   });
 
@@ -76,40 +59,38 @@
     )
   );
 
-  // 当 editBuffer 变化时，更新 pendingChanges
-  // 使用 $effect.preactive 来避免循环
-  $effect.pre(() => {
-    if (!originalValues) return;
+  async function handleSave() {
+    if (!originalValues || !hasChanges || isSaving) return;
     
-    const { name, address, data_type, var_type } = editBuffer;
+    isSaving = true;
+    statusMessage.set('⏳ 正在保存...');
     
-    if (name !== originalValues.name ||
-        address !== originalValues.address ||
-        data_type !== originalValues.data_type ||
-        var_type !== originalValues.var_type) {
+    try {
       const change: A2lVariableEdit = {
         action: 'modify',
         originalName: originalValues.name,
       };
 
-      if (name !== originalValues.name) change.name = name;
-      if (address !== originalValues.address) change.address = address;
-      if (data_type !== originalValues.data_type) change.data_type = data_type;
-      if (var_type !== originalValues.var_type) change.var_type = var_type;
+      if (editBuffer.name !== originalValues.name) change.name = editBuffer.name;
+      if (editBuffer.address !== originalValues.address) change.address = editBuffer.address;
+      if (editBuffer.data_type !== originalValues.data_type) change.data_type = editBuffer.data_type;
+      if (editBuffer.var_type !== originalValues.var_type) change.var_type = editBuffer.var_type;
 
-      addPendingChange(change);
-      hasPendingChange = true;
-    } else {
-      removePendingChange(originalValues.name, 'modify');
-      hasPendingChange = false;
+      await saveA2lChanges([change]);
+      
+      // 刷新列表
+      const variables = await searchA2lVariables('', 0, 10000);
+      a2lVariables.set(variables);
+      
+      // 更新 originalValues 为新值
+      originalValues = { ...editBuffer };
+      
+      statusMessage.set('✅ 已保存');
+    } catch (e) {
+      statusMessage.set(`❌ 保存失败: ${e}`);
     }
-  });
-
-  function resetChanges() {
-    if (!originalValues) return;
-    removePendingChange(originalValues.name, 'modify');
-    editBuffer = { ...originalValues };
-    hasPendingChange = false;
+    
+    isSaving = false;
   }
 </script>
 
@@ -118,9 +99,6 @@
     <div class="editor-header">
       <span class="label">编辑:</span>
       <span class="var-name">{originalValues.name}</span>
-      {#if hasPendingChange}
-        <span class="pending-badge" title="有未保存的修改">●</span>
-      {/if}
     </div>
     
     <div class="editor-row">
@@ -130,6 +108,7 @@
           type="text" 
           bind:value={editBuffer.name}
           class="field-input"
+          disabled={isSaving}
         />
       </label>
       <label>
@@ -139,6 +118,7 @@
           bind:value={editBuffer.address}
           class="field-input"
           placeholder="0x..."
+          disabled={isSaving}
         />
       </label>
     </div>
@@ -146,7 +126,7 @@
     <div class="editor-row">
       <label>
         <span class="field-label">数据类型</span>
-        <select bind:value={editBuffer.data_type} class="field-select">
+        <select bind:value={editBuffer.data_type} class="field-select" disabled={isSaving}>
           {#each A2L_TYPES as t}
             <option value={t}>{t}</option>
           {/each}
@@ -154,7 +134,7 @@
       </label>
       <label>
         <span class="field-label">变量类型</span>
-        <select bind:value={editBuffer.var_type} class="field-select">
+        <select bind:value={editBuffer.var_type} class="field-select" disabled={isSaving}>
           {#each VAR_TYPES as t}
             <option value={t}>{t === 'MEASUREMENT' ? '观测' : '标定'}</option>
           {/each}
@@ -164,11 +144,15 @@
     
     <div class="editor-actions">
       <button 
-        class="btn btn-secondary" 
-        onclick={resetChanges}
-        disabled={!hasChanges}
+        class="btn btn-primary" 
+        onclick={handleSave}
+        disabled={!hasChanges || isSaving}
       >
-        重置
+        {#if isSaving}
+          保存中...
+        {:else}
+          💾 保存
+        {/if}
       </button>
     </div>
   </div>
@@ -228,11 +212,6 @@
     font-weight: 500;
   }
 
-  .pending-badge {
-    color: #f59e0b;
-    font-size: 10px;
-  }
-
   .editor-row {
     display: flex;
     gap: 12px;
@@ -261,6 +240,11 @@
     color: var(--text);
     font-size: 12px;
     font-family: monospace;
+  }
+
+  .field-input:disabled, .field-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   .field-input:focus, .field-select:focus {
@@ -297,7 +281,14 @@
     cursor: not-allowed;
   }
 
-  .btn-secondary {
-    background: transparent;
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    opacity: 0.9;
+    background: var(--accent);
   }
 </style>

@@ -65,12 +65,6 @@ fn main() {
             commands::save_a2l_changes,
             commands::set_endianness,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window.emit("close-requested", ()).ok();
-                api.prevent_close();
-            }
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
