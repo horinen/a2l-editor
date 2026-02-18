@@ -261,11 +261,25 @@ impl A2lGenerator {
             let trimmed = line.trim();
 
             if trimmed.starts_with("/begin MEASUREMENT") {
+                // 从同一行提取变量名，标准格式：/begin MEASUREMENT name ""
+                if let Some(rest) = trimmed.strip_prefix("/begin MEASUREMENT") {
+                    let name = rest.trim().split_whitespace().next().unwrap_or("");
+                    if !name.is_empty() && !name.starts_with('"') {
+                        names.insert(name.to_string());
+                    }
+                }
                 in_measurement = true;
                 continue;
             }
 
             if trimmed.starts_with("/begin CHARACTERISTIC") {
+                // 从同一行提取变量名，标准格式：/begin CHARACTERISTIC name ""
+                if let Some(rest) = trimmed.strip_prefix("/begin CHARACTERISTIC") {
+                    let name = rest.trim().split_whitespace().next().unwrap_or("");
+                    if !name.is_empty() && !name.starts_with('"') {
+                        names.insert(name.to_string());
+                    }
+                }
                 in_characteristic = true;
                 continue;
             }
@@ -415,14 +429,15 @@ impl A2lGenerator {
                     }
                 }
 
-                // 获取变量名（块开始后第一个非空、非注释的token）
+                // 获取变量名（从 /begin 行提取，标准格式：/begin MEASUREMENT name ""）
+                let begin_prefix = if is_measurement {
+                    "/begin MEASUREMENT"
+                } else {
+                    "/begin CHARACTERISTIC"
+                };
                 let mut var_name = "";
-                for j in (block_start + 1)..block_end {
-                    let t = lines[j].trim();
-                    if !t.is_empty() && !t.starts_with('/') {
-                        var_name = t.split_whitespace().next().unwrap_or("");
-                        break;
-                    }
+                if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
+                    var_name = rest.trim().split_whitespace().next().unwrap_or("");
                 }
 
                 if names_set.contains(var_name) {

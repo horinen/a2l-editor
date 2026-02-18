@@ -340,6 +340,8 @@
 | 9 | A2L 输出变量名换到下一行 | ✅ 已修复 | `/begin MEASUREMENT/CHARACTERISTIC` 后紧跟变量名 |
 | 10 | 第一个添加的变量缩进多了 | ✅ 已修复 | 插入位置移动到行首，避免前导空格叠加 |
 | 11 | A2L 包含 CANAPE_EXT 非标准字段 | ✅ 已修复 | 移除 IF_DATA CANAPE_EXT 块 |
+| 12 | remove_variables 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
+| 13 | parse_existing_names 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
 
 ---
 
@@ -347,6 +349,7 @@
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-02-18 | **A2L 删除变量修复**:<br>- #12: 修复 remove_variables 无法识别新格式<br>- #13: 修复 parse_existing_names 无法识别新格式<br>- 根因: 两个函数假设变量名在 /begin 行之后，但标准格式在同一行<br>- 影响文件: a2l.rs |
 | 2026-02-18 | **A2L 输出格式修复**:<br>- #9: 修复变量名换行问题，`/begin MEASUREMENT name ""` 同行<br>- #10: 修复第一个变量缩进多了，插入位置移动到行首<br>- #11: 移除 CANAPE_EXT 非标准字段（IF_DATA 块）<br>- 影响文件: a2l.rs (generate_measurement, generate_measurement_block, generate_characteristic_block, append_to_file, apply_changes) |
 | 2026-02-18 | **Bug 修复 #8**: 删除 A2L 变量没有效果<br>- 根因: `a2lSelectedIndices` 存储显示索引，但后端用原始索引访问数组<br>- 修复: 选中状态从索引改为变量名称 (`a2lSelectedNames`)<br>- 影响文件: stores.ts, A2lPanel.svelte, A2lEditor.svelte, ContextMenuA2l.svelte, StatusBar.svelte, +page.svelte, commands.ts, commands.rs |
 | 2026-02-18 | **A2L 格式问题分析**:<br>- #9: `/begin MEASUREMENT` 后变量名换到下一行（应为同行）<br>- #10: 第一个添加的变量缩进多了（插入位置包含前导空格）<br>- #11: A2L 包含 CANAPE_EXT 非标准字段 |
