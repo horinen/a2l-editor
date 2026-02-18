@@ -7,6 +7,22 @@
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
 
+  function getDefaultBitMask(dataType: string): string {
+    const masks: Record<string, string> = {
+      'UBYTE': '0x00',
+      'SBYTE': '0x00',
+      'UWORD': '0x0000',
+      'SWORD': '0x0000',
+      'ULONG': '0x00000000',
+      'SLONG': '0x00000000',
+      'A_UINT64': '0x0000000000000000',
+      'A_INT64': '0x0000000000000000',
+      'FLOAT32_IEEE': '0x00000000',
+      'FLOAT64_IEEE': '0x0000000000000000',
+    };
+    return masks[dataType] || '0x00';
+  }
+
   let editBuffer = $state<{
     name: string;
     address: string;
@@ -35,13 +51,13 @@
         name: selectedVariable.name,
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
-        bit_mask: selectedVariable.bit_mask || '',
+        bit_mask: selectedVariable.bit_mask || getDefaultBitMask(selectedVariable.data_type),
       };
       originalValues = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
-        bit_mask: selectedVariable.bit_mask || '',
+        bit_mask: selectedVariable.bit_mask || getDefaultBitMask(selectedVariable.data_type),
       };
     } else {
       originalValues = null;

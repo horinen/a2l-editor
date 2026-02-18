@@ -91,6 +91,7 @@ pub struct VariableInfo {
     pub address: Option<String>,
     pub data_type: String,
     pub var_type: String,
+    pub bit_mask: Option<String>,
 }
 
 impl From<&A2lVariable> for VariableInfo {
@@ -100,6 +101,7 @@ impl From<&A2lVariable> for VariableInfo {
             address: var.address.clone(),
             data_type: var.data_type.clone(),
             var_type: var.var_type.clone(),
+            bit_mask: var.bit_mask.clone(),
         }
     }
 }

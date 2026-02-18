@@ -657,7 +657,7 @@ impl A2lGenerator {
 
         let begin_re = Regex::new(r"^(\s*/begin\s+(?:MEASUREMENT|CHARACTERISTIC)\s+)\S+")?;
         let ecu_addr_re = Regex::new(r"^(\s*ECU_ADDRESS\s+)(0x[0-9a-fA-F]+)")?;
-        let link_map_addr_re = Regex::new(r#"^(.*LINK_MAP\s+"[^"]+"\s+)(0x[0-9a-fA-F]+)"#)?;
+        let link_map_addr_re = Regex::new(r#"^(.*LINK_MAP\s+"[^"]+"\s+)(0x[0-9a-fA-F]+)(.*)$"#)?;
         let data_type_re = Regex::new(&format!("^(\\s*)({})(\\s+.*)$", original_data_type))?;
         let bit_mask_re = Regex::new(r"^(\s*BIT_MASK\s+)(0x[0-9a-fA-F]+)")?;
 
@@ -704,7 +704,7 @@ impl A2lGenerator {
                 }
 
                 if let Some(caps) = link_map_addr_re.captures(line) {
-                    result.push_str(&format!("{}{}\n", &caps[1], final_address));
+                    result.push_str(&format!("{}{}{}\n", &caps[1], final_address, &caps[3]));
                     continue;
                 }
             }
