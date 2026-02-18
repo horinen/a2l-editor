@@ -112,8 +112,8 @@ impl A2lGenerator {
         output.push_str(&format!("/begin PROJECT {} \"\"\n", self.project_name));
         output.push_str(&format!("  /begin MODULE {} \"\"\n", self.module_name));
 
-        output.push_str("    /begin CHARACTERISTIC\n");
-        output.push_str("      __PLACEHOLDER__ \"\" VALUE 0x0 NO_COMPU_METHOD 0 0 0 0\n");
+        output.push_str("    /begin CHARACTERISTIC __PLACEHOLDER__ \"\"\n");
+        output.push_str("      VALUE 0x0 NO_COMPU_METHOD 0 0 0 0\n");
         output.push_str("    /end CHARACTERISTIC\n\n");
 
         output.push_str("    /begin COMPU_METHOD\n");
@@ -158,7 +158,15 @@ impl A2lGenerator {
     fn generate_measurement_block(entry: &A2lEntry) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let format_str = Self::get_format_string(a2l_type);
-        let (min_val, max_val) = Self::get_min_max(a2l_type);
+
+        // bitfield 使用 bit_size 计算上限
+        let (min_val, max_val) = if entry.is_bitfield() {
+            let size = entry.bit_size.unwrap();
+            ("0".to_string(), format!("{}", Self::get_bitfield_max(size)))
+        } else {
+            let (min, max) = Self::get_min_max(a2l_type);
+            (min.to_string(), max.to_string())
+        };
 
         let mut output = String::new();
 
@@ -170,6 +178,13 @@ impl A2lGenerator {
             "      {} NO_COMPU_METHOD 0 0 {} {}\n",
             a2l_type, min_val, max_val
         ));
+
+        // bitfield 添加 BIT_MASK
+        if entry.is_bitfield() {
+            let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
+            output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
+        }
+
         output.push_str(&format!("      ECU_ADDRESS 0x{:08X}\n", entry.address));
         output.push_str("      ECU_ADDRESS_EXTENSION 0x0\n");
         output.push_str(&format!("      FORMAT \"{}\"\n", format_str));
@@ -181,8 +196,16 @@ impl A2lGenerator {
 
     fn generate_characteristic_block(entry: &A2lEntry) -> String {
         let a2l_type = entry.a2l_type.as_str();
-        let (_, max_val) = Self::get_min_max(a2l_type);
         let record_layout = Self::get_record_layout(a2l_type);
+
+        // bitfield 使用 bit_size 计算上限
+        let max_val = if entry.is_bitfield() {
+            let size = entry.bit_size.unwrap();
+            format!("{}", Self::get_bitfield_max(size))
+        } else {
+            let (_, max) = Self::get_min_max(a2l_type);
+            max.to_string()
+        };
 
         let mut output = String::new();
 
@@ -194,6 +217,13 @@ impl A2lGenerator {
             "      VALUE 0x{:08X} {} 0 NO_COMPU_METHOD 0 {}\n",
             entry.address, record_layout, max_val
         ));
+
+        // bitfield 添加 BIT_MASK
+        if entry.is_bitfield() {
+            let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
+            output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
+        }
+
         output.push_str(&format!("      EXTENDED_LIMITS 0 {}\n", max_val));
         output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", entry.full_name));
         output.push_str("    /end CHARACTERISTIC\n\n");
@@ -243,6 +273,18 @@ impl A2lGenerator {
             "FLOAT64_IEEE" => ("-1.7E308", "1.7E308"),
             _ => ("0", "0"),
         }
+    }
+
+    fn calculate_bit_mask(bit_offset: Option<usize>, bit_size: Option<usize>) -> u64 {
+        if let (Some(offset), Some(size)) = (bit_offset, bit_size) {
+            ((1u64 << size) - 1) << offset
+        } else {
+            0
+        }
+    }
+
+    fn get_bitfield_max(bit_size: usize) -> u64 {
+        (1u64 << bit_size) - 1
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
@@ -494,13 +536,14 @@ impl A2lGenerator {
                     }
                 }
 
+                let begin_prefix = if is_measurement {
+                    "/begin MEASUREMENT"
+                } else {
+                    "/begin CHARACTERISTIC"
+                };
                 let mut current_var_name = "";
-                for j in (block_start + 1)..block_end {
-                    let t = lines[j].trim();
-                    if !t.is_empty() && !t.starts_with('/') {
-                        current_var_name = t.split_whitespace().next().unwrap_or("");
-                        break;
-                    }
+                if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
+                    current_var_name = rest.trim().split_whitespace().next().unwrap_or("");
                 }
 
                 if current_var_name == original_name {
@@ -659,7 +702,10 @@ impl A2lGenerator {
                 } else {
                     "CHARACTERISTIC"
                 };
-                result.push_str(&format!("{}{} {} \"\"\n", prefix, "/begin", block_type));
+                result.push_str(&format!(
+                    "{}{} {} {} \"\"\n",
+                    prefix, "/begin", block_type, final_name
+                ));
                 continue;
             }
 

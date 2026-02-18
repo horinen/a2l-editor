@@ -37,9 +37,9 @@
 | 9. v0.0.9 重构 | 4/4 | ✅ 完成 |
 | 10. 变量编辑功能 | 8/8 | ✅ 完成 |
 | 11. 移除延迟保存 | 9/9 | ✅ 完成 |
-| 12. A2L 格式修复 | 5/5 | ✅ 完成 |
+| 12. A2L 格式修复 | 14/14 | ✅ 完成 |
 
-**总进度**: 121/121 (100%)
+**总进度**: 130/130 (100%)
 
 **测试通过率**: 100% ✅
 
@@ -323,6 +323,18 @@
 - [x] 12.2.1 修复 `append_to_file` 第一个变量缩进多了 ✅
 - [x] 12.2.2 修复 `apply_changes` 第一个变量缩进多了 ✅
 
+### 12.3 变量识别修复
+- [x] 12.3.1 修复 `remove_variables` 无法识别新格式 ✅
+- [x] 12.3.2 修复 `parse_existing_names` 无法识别新格式 ✅
+- [x] 12.3.3 修复 `modify_variable` 无法识别新格式 ✅
+- [x] 12.3.4 修复 `apply_changes_to_block` 输出丢失变量名 ✅
+
+### 12.4 bitfield 支持
+- [x] 12.4.1 `generate_measurement_block` 添加 BIT_MASK 支持 ✅
+- [x] 12.4.2 `generate_characteristic_block` 添加 BIT_MASK 支持 ✅
+- [x] 12.4.3 添加 `is_bitfield()` 方法 ✅
+- [x] 12.4.4 添加 `calculate_bit_mask()` 函数 ✅
+
 ---
 
 ## 问题追踪
@@ -339,9 +351,16 @@
 | 8 | 删除 A2L 变量没有效果 | ✅ 已修复 | 选中状态从索引改为变量名称，避免过滤/排序后索引错位 |
 | 9 | A2L 输出变量名换到下一行 | ✅ 已修复 | `/begin MEASUREMENT/CHARACTERISTIC` 后紧跟变量名 |
 | 10 | 第一个添加的变量缩进多了 | ✅ 已修复 | 插入位置移动到行首，避免前导空格叠加 |
-| 11 | A2L 包含 CANAPE_EXT 非标准字段 | ✅ 已修复 | 移除 IF_DATA CANAPE_EXT 块 |
-| 12 | remove_variables 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
-| 13 | parse_existing_names 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
+| 12 | A2L 输出变量名换到下一行 | ✅ 已修复 | `/begin MEASUREMENT/CHARACTERISTIC` 后紧跟变量名 |
+| 13 | 第一个添加的变量缩进多了 | ✅ 已修复 | 插入位置移动到行首，避免前导空格叠加 |
+| 14 | A2L 包含 CANAPE_EXT 非标准字段 | ✅ 已修复 | 移除 IF_DATA CANAPE_EXT 块 |
+| 15 | remove_variables 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
+| 16 | parse_existing_names 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
+| 17 | modify_variable 无法识别新格式 | ✅ 已修复 | 从 /begin 同一行提取变量名 |
+| 18 | apply_changes_to_block 输出丢失变量名 | ✅ 已修复 | /begin 行添加 final_name |
+| 19 | generate 占位符格式错误 | ✅ 已修复 | /begin CHARACTERISTIC __PLACEHOLDER__ "" |
+| 20 | generate_measurement_block 不支持 bitfield | ✅ 已修复 | 添加 BIT_MASK 和正确的 max_val |
+| 21 | generate_characteristic_block 不支持 bitfield | ✅ 已修复 | 添加 BIT_MASK 和正确的 max_val |
 
 ---
 
@@ -349,8 +368,9 @@
 
 | 日期 | 变更内容 |
 |------|----------|
-| 2026-02-18 | **A2L 删除变量修复**:<br>- #12: 修复 remove_variables 无法识别新格式<br>- #13: 修复 parse_existing_names 无法识别新格式<br>- 根因: 两个函数假设变量名在 /begin 行之后，但标准格式在同一行<br>- 影响文件: a2l.rs |
-| 2026-02-18 | **A2L 输出格式修复**:<br>- #9: 修复变量名换行问题，`/begin MEASUREMENT name ""` 同行<br>- #10: 修复第一个变量缩进多了，插入位置移动到行首<br>- #11: 移除 CANAPE_EXT 非标准字段（IF_DATA 块）<br>- 影响文件: a2l.rs (generate_measurement, generate_measurement_block, generate_characteristic_block, append_to_file, apply_changes) |
+| 2026-02-18 | **全面修复 A2L 格式问题**:<br>- #17: 修复 modify_variable 无法识别新格式<br>- #18: 修复 apply_changes_to_block 输出丢失变量名<br>- #19: 修复 generate 占位符格式错误<br>- #20-21: 添加 bitfield 支持（BIT_MASK 和正确的 max_val）<br>- 添加 is_bitfield() 方法和 calculate_bit_mask()、get_bitfield_max() 函数 |
+| 2026-02-18 | **A2L 删除变量修复**:<br>- #15: 修复 remove_variables 无法识别新格式<br>- #16: 修复 parse_existing_names 无法识别新格式<br>- 根因: 两个函数假设变量名在 /begin 行之后，但标准格式在同一行<br>- 影响文件: a2l.rs |
+| 2026-02-18 | **A2L 输出格式修复**:<br>- #12: 修复变量名换行问题，`/begin MEASUREMENT name ""` 同行<br>- #13: 修复第一个变量缩进多了，插入位置移动到行首<br>- #14: 移除 CANAPE_EXT 非标准字段（IF_DATA 块）<br>- 影响文件: a2l.rs (generate_measurement, generate_measurement_block, generate_characteristic_block, append_to_file, apply_changes) |
 | 2026-02-18 | **Bug 修复 #8**: 删除 A2L 变量没有效果<br>- 根因: `a2lSelectedIndices` 存储显示索引，但后端用原始索引访问数组<br>- 修复: 选中状态从索引改为变量名称 (`a2lSelectedNames`)<br>- 影响文件: stores.ts, A2lPanel.svelte, A2lEditor.svelte, ContextMenuA2l.svelte, StatusBar.svelte, +page.svelte, commands.ts, commands.rs |
 | 2026-02-18 | **A2L 格式问题分析**:<br>- #9: `/begin MEASUREMENT` 后变量名换到下一行（应为同行）<br>- #10: 第一个添加的变量缩进多了（插入位置包含前导空格）<br>- #11: A2L 包含 CANAPE_EXT 非标准字段 |
 | 2026-02-17 | **移除延迟保存机制**:<br>- 移除 Header 保存/重置按钮、Ctrl+S<br>- A2lEditor 重置按钮改为保存按钮<br>- 恢复添加/删除实时保存<br>- 删除 CloseConfirmDialog<br>- 移除 pendingChanges 相关代码 |

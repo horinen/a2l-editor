@@ -420,6 +420,10 @@ impl A2lEntry {
         self
     }
 
+    pub fn is_bitfield(&self) -> bool {
+        self.bit_size.is_some()
+    }
+
     pub fn with_array_index(mut self, index: Vec<usize>) -> Self {
         self.array_index = Some(index);
         self
