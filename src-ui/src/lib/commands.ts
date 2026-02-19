@@ -70,6 +70,7 @@ export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResu
     address: e.address,
     data_type: e.data_type,
     var_type: e.var_type,
+    bit_mask: e.bit_mask,
     entry: e.entry,
     export_mode: e.exportMode,
   }));
