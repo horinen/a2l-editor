@@ -33,3 +33,7 @@ Thumbs.db
 .ai-testing/review.json
 .ai-testing/final-report.md
 .ai-testing/*.py
+
+# Tauri Driver Test - 只提交 lib/ 目录
+.tauri-driver-test/*
+!.tauri-driver-test/lib/

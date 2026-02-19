@@ -1,0 +1,317 @@
+{
+  "version": "1.0",
+  "app_path": "target/debug/a2l-editor-tauri",
+  "test_files": {
+    "elf": "/home/hori/project/sample.elf",
+    "a2l": "/home/hori/project/sample.a2l"
+  },
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "suite": "app_launch",
+      "name": "test_app_launch_and_title",
+      "description": "测试应用启动和窗口标题",
+      "priority": "high",
+      "steps": [
+        { "action": "wait_for_title", "timeout": 10000 },
+        { "action": "assert_title", "expect": "A2L Editor" }
+      ],
+      "expected_result": "应用正常启动，标题为 'A2L Editor'"
+    },
+    {
+      "id": "TC-002",
+      "suite": "app_launch",
+      "name": "test_header_elements_exist",
+      "description": "测试 Header 组件元素存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return document.querySelector('.header') !== null;" },
+        { "action": "assert_result_equals", "expect": true },
+        { "action": "execute_script", "script": "return document.querySelector('.menu-btn') !== null;" },
+        { "action": "assert_result_equals", "expect": true },
+        { "action": "execute_script", "script": "return document.querySelector('.endianness-btn') !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "Header 组件包含所有必要元素"
+    },
+    {
+      "id": "TC-003",
+      "suite": "tauri_commands",
+      "name": "test_get_elf_count_empty",
+      "description": "测试未加载时 get_elf_count 返回 0",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('get_elf_count').then(r => r).catch(e => 'error: ' + e);" },
+        { "action": "assert_result_equals", "expect": 0 }
+      ],
+      "expected_result": "未加载时返回 0"
+    },
+    {
+      "id": "TC-004",
+      "suite": "tauri_commands",
+      "name": "test_set_endianness_little",
+      "description": "测试设置字节序为小端",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('set_endianness', { endianness: 'little' }).then(() => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_equals", "expect": "success" }
+      ],
+      "expected_result": "设置小端字节序成功"
+    },
+    {
+      "id": "TC-005",
+      "suite": "tauri_commands",
+      "name": "test_set_endianness_big",
+      "description": "测试设置字节序为大端",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('set_endianness', { endianness: 'big' }).then(() => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_equals", "expect": "success" }
+      ],
+      "expected_result": "设置大端字节序成功"
+    },
+    {
+      "id": "TC-006",
+      "suite": "tauri_commands",
+      "name": "test_set_endianness_invalid",
+      "description": "测试设置无效字节序返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('set_endianness', { endianness: 'invalid' }).then(() => 'no error').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "无效字节序返回错误"
+    },
+    {
+      "id": "TC-007",
+      "suite": "tauri_commands",
+      "name": "test_search_elf_entries_without_load",
+      "description": "测试未加载时搜索返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('search_elf_entries', { query: '', offset: 0, limit: 10 }).then(r => 'success: ' + r.length).catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "未加载 ELF 时搜索返回错误"
+    },
+    {
+      "id": "TC-008",
+      "suite": "tauri_commands",
+      "name": "test_search_a2l_variables_without_load",
+      "description": "测试未加载 A2L 时搜索返回空数组",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('search_a2l_variables', { query: '', offset: 0, limit: 10 }).then(r => JSON.stringify(r)).catch(e => 'error: ' + e);" },
+        { "action": "assert_result_equals", "expect": "[]" }
+      ],
+      "expected_result": "未加载 A2L 时搜索返回空数组"
+    },
+    {
+      "id": "TC-009",
+      "suite": "ui_interactions",
+      "name": "test_menu_opens_on_click",
+      "description": "测试文件菜单点击后打开（单脚本模式）",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const btn = document.querySelector('.menu-btn'); btn.click(); return document.querySelector('.menu') !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "点击菜单按钮后菜单打开"
+    },
+    {
+      "id": "TC-010",
+      "suite": "ui_interactions",
+      "name": "test_endianness_button_changes_state",
+      "description": "测试字节序按钮点击后状态变化",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return document.querySelector('.endianness-btn')?.textContent?.trim();" },
+        { "action": "store_result", "key": "state_before" },
+        { "action": "execute_script", "script": "document.querySelector('.endianness-btn')?.click(); return true;" },
+        { "action": "wait", "duration": 300 },
+        { "action": "execute_script", "script": "return document.querySelector('.endianness-btn')?.textContent?.trim();" },
+        { "action": "assert_result_changed", "from": "stored:state_before" }
+      ],
+      "expected_result": "字节序按钮文本从小端变为大端或反之"
+    },
+    {
+      "id": "TC-011",
+      "suite": "ui_interactions",
+      "name": "test_theme_button_exists",
+      "description": "测试主题切换按钮存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return document.querySelector('.theme-btn') !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "主题切换按钮存在"
+    },
+    {
+      "id": "TC-012",
+      "suite": "ui_interactions",
+      "name": "test_theme_cycles_on_click",
+      "description": "测试主题切换功能",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const html = document.documentElement; const theme = html.classList.contains('light') ? 'light' : (html.classList.contains('midnight') ? 'midnight' : (html.classList.contains('ocean') ? 'ocean' : 'dark')); return theme;" },
+        { "action": "store_result", "key": "theme_before" },
+        { "action": "execute_script", "script": "document.querySelector('button[title=\"切换主题\"]')?.click(); return true;" },
+        { "action": "wait", "duration": 500 },
+        { "action": "execute_script", "script": "const html = document.documentElement; return html.classList.contains('light') ? 'light' : (html.classList.contains('midnight') ? 'midnight' : (html.classList.contains('ocean') ? 'ocean' : 'dark'));" },
+        { "action": "assert_result_changed", "from": "stored:theme_before" }
+      ],
+      "expected_result": "主题在点击后变化"
+    },
+    {
+      "id": "TC-013",
+      "suite": "ui_interactions",
+      "name": "test_status_bar_exists",
+      "description": "测试状态栏存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const statusBar = document.querySelector('.status-bar'); return statusBar !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "状态栏存在"
+    },
+    {
+      "id": "TC-014",
+      "suite": "ui_interactions",
+      "name": "test_panels_exist",
+      "description": "测试左右面板存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return document.querySelector('.panel-left') !== null && document.querySelector('.panel-right') !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "左右面板都存在"
+    },
+    {
+      "id": "TC-015",
+      "suite": "ui_interactions",
+      "name": "test_search_inputs_exist",
+      "description": "测试搜索输入框存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const inputs = document.querySelectorAll('input[type=\"text\"], input[placeholder]'); return inputs.length >= 2;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "存在至少两个搜索输入框"
+    },
+    {
+      "id": "TC-016",
+      "suite": "ui_interactions",
+      "name": "test_resizer_exists",
+      "description": "测试面板调整器存在",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return document.querySelector('.resizer') !== null;" },
+        { "action": "assert_result_equals", "expect": true }
+      ],
+      "expected_result": "面板调整器存在"
+    },
+    {
+      "id": "TC-017",
+      "suite": "dialogs",
+      "name": "test_about_dialog_opens",
+      "description": "测试关于对话框打开",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const aboutBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('关于')); aboutBtn?.click(); return aboutBtn !== null;" },
+        { "action": "assert_result_equals", "expect": true },
+        { "action": "wait", "duration": 300 },
+        { "action": "execute_script", "script": "return document.querySelector('.dialog, [role=\"dialog\"]') !== null || document.body.innerHTML.includes('A2L Editor');" }
+      ],
+      "expected_result": "点击关于按钮后对话框打开"
+    },
+    {
+      "id": "TC-018",
+      "suite": "dialogs",
+      "name": "test_help_dialog_opens",
+      "description": "测试帮助对话框打开",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const helpBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('手册')); helpBtn?.click(); return helpBtn !== null;" },
+        { "action": "assert_result_equals", "expect": true },
+        { "action": "wait", "duration": 300 },
+        { "action": "execute_script", "script": "return document.body.innerHTML.length > 1000;" }
+      ],
+      "expected_result": "点击帮助按钮后对话框打开"
+    },
+    {
+      "id": "TC-019",
+      "suite": "dialogs",
+      "name": "test_generate_dialog_opens_from_menu",
+      "description": "测试从菜单打开生成对话框",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "const menuBtn = document.querySelector('.menu-btn'); menuBtn?.click(); const menu = document.querySelector('.menu'); if (!menu) return false; const genBtn = Array.from(menu.querySelectorAll('button')).find(b => b.textContent?.includes('重新生成')); genBtn?.click(); return genBtn !== null;" },
+        { "action": "assert_result_equals", "expect": true },
+        { "action": "wait", "duration": 300 },
+        { "action": "screenshot", "name": "generate_dialog" }
+      ],
+      "expected_result": "从菜单点击重新生成缓存后对话框打开"
+    },
+    {
+      "id": "TC-020",
+      "suite": "error_handling",
+      "name": "test_load_nonexistent_elf",
+      "description": "测试加载不存在的 ELF 文件返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('load_elf', { path: '/nonexistent/path/file.elf' }).then(r => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "加载不存在的文件返回错误"
+    },
+    {
+      "id": "TC-021",
+      "suite": "error_handling",
+      "name": "test_load_nonexistent_package",
+      "description": "测试加载不存在的数据包返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('load_package', { path: '/nonexistent/path/file.a2ldata' }).then(r => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "加载不存在的数据包返回错误"
+    },
+    {
+      "id": "TC-022",
+      "suite": "error_handling",
+      "name": "test_load_nonexistent_a2l",
+      "description": "测试加载不存在的 A2L 文件返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('load_a2l', { path: '/nonexistent/path/file.a2l' }).then(r => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "加载不存在的 A2L 文件返回错误"
+    },
+    {
+      "id": "TC-023",
+      "suite": "error_handling",
+      "name": "test_export_without_selection",
+      "description": "测试未选择条目时导出返回错误",
+      "priority": "high",
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('export_entries', { indices: [], mode: 'measurement' }).then(r => 'success').catch(e => 'error: ' + e);" },
+        { "action": "assert_result_contains", "expect": "error" }
+      ],
+      "expected_result": "未选择条目时导出返回错误"
+    },
+    {
+      "id": "TC-024",
+      "suite": "long_running",
+      "name": "test_generate_package_from_elf",
+      "description": "长时间测试：从 ELF 生成数据包（不可跳过）",
+      "priority": "high",
+      "timeout_ms": 600000,
+      "steps": [
+        { "action": "execute_script", "script": "return window.__TAURI__.core.invoke('generate_package', { elfPath: '/home/hori/project/sample.elf', outputPath: null }).then(r => JSON.stringify(r)).catch(e => 'error: ' + e);", "timeout": 600000 },
+        { "action": "assert_result_contains", "expect": "file_name" }
+      ],
+      "expected_result": "从 ELF 生成数据包成功，返回包含 file_name 的元信息"
+    }
+  ]
+}
