@@ -37,7 +37,16 @@
         </section>
 
         <section>
-          <h3>导出模式</h3>
+          <h3>添加变量</h3>
+          <ul>
+            <li><strong>从 ELF 添加</strong>: 右键选中变量 → 添加为观测变量/标定变量</li>
+            <li><strong>手动添加</strong>: 点击 A2L 面板搜索栏右侧 ➕ 按钮，输入变量信息</li>
+            <li>手动添加需填写：变量名、地址（十六进制）、数据类型</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>变量类型</h3>
           <ul>
             <li><strong>观测变量 (MEASUREMENT)</strong>: 只读，用于监控变量值</li>
             <li><strong>标定变量 (CHARACTERISTIC)</strong>: 可写，用于标定参数</li>
