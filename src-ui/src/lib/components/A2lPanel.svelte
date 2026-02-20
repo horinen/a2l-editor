@@ -8,6 +8,7 @@
   import { debounce } from '$lib/utils/debounce';
   import VirtualList from './VirtualList.svelte';
   import A2lEditor from './A2lEditor.svelte';
+  import AddVariableDialog from './AddVariableDialog.svelte';
 
   interface Props {
     oncontextmenu?: (e: CustomEvent<{ x: number; y: number; names: string[] }>) => void;
@@ -19,6 +20,7 @@
   let focusedName = $state<string | null>(null);
   let searchQuery = $state($a2lSearchQuery);
   let virtualListRef: VirtualList<A2lVariable>;
+  let showAddDialog = $state(false);
   
   // 编辑器面板高度 (像素)
   let editorHeight = $state(120);
@@ -247,6 +249,7 @@
     {#if searchQuery}
       <button class="clear-btn" onclick={clearSearch}>✖</button>
     {/if}
+    <button class="add-btn" onclick={() => showAddDialog = true} title="手动添加变量">➕</button>
   </div>
 
   <div class="table-header">
@@ -310,6 +313,8 @@
   </div>
 </div>
 
+<AddVariableDialog visible={showAddDialog} onclose={() => showAddDialog = false} />
+
 <style>
   .panel {
     display: flex;
@@ -358,6 +363,21 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
+  }
+
+  .add-btn {
+    padding: 4px 10px;
+    background: var(--accent);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    cursor: pointer;
+    font-size: 12px;
+    transition: opacity 0.2s;
+  }
+
+  .add-btn:hover {
+    opacity: 0.85;
   }
 
   .table-header {
