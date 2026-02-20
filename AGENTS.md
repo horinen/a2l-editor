@@ -74,6 +74,7 @@ a2l-editor/
         ├── types.ts   # TypeScript 类型定义
         ├── commands.ts # Tauri 命令调用
         ├── stores.ts  # Svelte stores (状态管理)
+        ├── themes.ts  # 主题管理
         └── components/ # Svelte 组件
 ```
 
@@ -85,21 +86,36 @@ a2l-editor/
 - 手动添加支持实时检测变量名是否重复
 
 ### A2L 变量编辑
-- 在 A2L 面板下方有可拖拽调整大小的编辑区域
-- 选中单个变量后可编辑：名称、地址、数据类型、变量类型
+- 在 A2L 面板底部有可拖拽调整大小的编辑区域（拖拽分隔条调整高度）
+- 选中单个变量后可编辑：名称、地址、数据类型、BIT_MASK
 - 点击"保存"按钮立即写入 A2L 文件
-- 点击"重置"按钮恢复为原始值
+
+### 复制功能
+- 右键菜单支持复制变量名称到剪贴板
+- 右键菜单支持复制变量地址到剪贴板
+
+### 多列排序
+- 点击列头进行单列排序
+- 按住 Shift + 点击列头添加多列排序
+- 排序指示器显示优先级数字（如 ¹, ²）
+
+### 列宽调整
+- 拖拽列标题之间的分隔线可调整列宽
 
 ### 实时保存
 - 所有操作（编辑、添加、删除）立即写入文件
 - 编辑变量：点击保存按钮后立即生效
-- 添加变量：右键添加后立即写入
+- 添加变量：右键添加或手动添加后立即写入
 - 删除变量：右键删除后立即生效
 
 ### 字节序设置
 - Header 右侧有"小端/大端"切换按钮
 - 全局设置，存储在后端 AppState.endianness
 - 不持久化，每次启动默认小端
+
+### 主题系统
+- 支持 4 种主题：Dark, Light, Midnight, Ocean
+- 主题设置保存到 localStorage，自动加载
 
 ## Rust 代码风格
 
@@ -213,6 +229,7 @@ export interface A2lVariableEdit {
   address?: string;
   data_type?: string;
   var_type?: 'MEASUREMENT' | 'CHARACTERISTIC';
+  bit_mask?: string;
   entry?: A2lEntry;
   exportMode?: ExportMode;
 }
@@ -247,6 +264,10 @@ export async function loadElf(path: string): Promise<LoadResult> {
   return invoke('load_elf', { path });
 }
 
+export async function loadPackage(path: string): Promise<LoadResult> {
+  return invoke('load_package', { path });
+}
+
 export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResult> {
   return invoke('save_a2l_changes', { edits });
 }
@@ -258,28 +279,44 @@ export async function setEndianness(endianness: 'little' | 'big'): Promise<void>
 
 ## Tauri 命令约定
 
-### Rust 端
+### Rust 端完整命令列表
 ```rust
+// 文件加载
 #[tauri::command]
-pub fn load_elf(path: String, state: State<Mutex<AppState>>) -> Result<LoadResult, String> {
-    // ...
-}
+pub fn load_elf(path: String, state: State<Mutex<AppState>>) -> Result<LoadResult, String>
 
 #[tauri::command]
-pub fn save_a2l_changes(
-    edits: Vec<VariableEditInput>,
-    state: State<Mutex<AppState>>,
-) -> Result<SaveResult, String> {
-    // 处理修改变量操作
-}
+pub fn load_package(path: String, state: State<Mutex<AppState>>) -> Result<LoadResult, String>
 
 #[tauri::command]
-pub fn set_endianness(
-    endianness: String,
-    state: State<Mutex<AppState>>,
-) -> Result<(), String> {
-    // 设置字节序
-}
+pub fn generate_package(elf_path: String, output_path: Option<String>, state: State<Mutex<AppState>>) -> Result<PackageMetaInfo, String>
+
+#[tauri::command]
+pub fn load_a2l(path: String, state: State<Mutex<AppState>>) -> Result<A2lLoadResult, String>
+
+// 条目查询
+#[tauri::command]
+pub fn search_elf_entries(query: String, offset: usize, limit: usize, sort_field: Option<String>, sort_order: Option<String>, state: State<Mutex<AppState>>) -> Result<Vec<EntryInfo>, String>
+
+#[tauri::command]
+pub fn get_elf_count(state: State<Mutex<AppState>>) -> Result<usize, String>
+
+#[tauri::command]
+pub fn search_a2l_variables(query: String, offset: usize, limit: usize, state: State<Mutex<AppState>>) -> Result<Vec<VariableInfo>, String>
+
+// 导出/编辑
+#[tauri::command]
+pub fn export_entries(indices: Vec<usize>, mode: String, state: State<Mutex<AppState>>) -> Result<ExportResult, String>
+
+#[tauri::command]
+pub fn delete_variables(names: Vec<String>, state: State<Mutex<AppState>>) -> Result<usize, String>
+
+#[tauri::command]
+pub fn save_a2l_changes(edits: Vec<VariableEditInput>, state: State<Mutex<AppState>>) -> Result<SaveResult, String>
+
+// 设置
+#[tauri::command]
+pub fn set_endianness(endianness: String, state: State<Mutex<AppState>>) -> Result<(), String>
 ```
 
 ### TypeScript 端调用
@@ -294,6 +331,24 @@ export async function searchElfEntries(
   return invoke('search_elf_entries', { query, offset, limit, sortField, sortOrder });
 }
 ```
+
+## 前端组件说明
+
+### 主要组件
+- `A2lPanel.svelte`: A2L 变量列表面板，含搜索、排序、编辑区域
+- `VariableList.svelte`: ELF 变量列表面板，虚拟滚动
+- `VirtualList.svelte`: 通用虚拟滚动组件，支持 `scrollToIndex()` 方法
+- `A2lEditor.svelte`: 变量编辑表单
+- `AddVariableDialog.svelte`: 手动添加变量对话框
+- `ContextMenuA2l.svelte`: A2L 右键菜单（删除、复制）
+- `ContextMenuElf.svelte`: ELF 右键菜单（导出、复制）
+- `Header.svelte`: 顶部导航栏
+
+### UI 交互特性
+- 列宽拖拽调整：通过 `.col-resize` 分隔线
+- 编辑区域高度拖拽：通过 `.editor-resizer` 分隔条
+- 多列排序：`toggleSort()` 函数支持 Shift 键添加排序列
+- 虚拟滚动：`VirtualList` 使用 ResizeObserver 监听容器大小
 
 ## 测试
 

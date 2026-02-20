@@ -18,21 +18,23 @@
         <section>
           <h3>快速开始</h3>
           <ol>
-            <li><strong>打开 ELF</strong>: 文件 → 打开 ELF，选择 ELF 文件</li>
+            <li><strong>打开文件</strong>: 文件 → 打开 ELF（或直接打开数据包）</li>
             <li><strong>选择 A2L</strong>: 点击"选择目标 A2L"按钮</li>
             <li><strong>搜索变量</strong>: 在搜索框输入关键词</li>
-            <li><strong>导出变量</strong>: 右键选中变量 → 添加为观测变量/标定变量</li>
+            <li><strong>添加变量</strong>: 右键选中变量 → 添加为观测变量/标定变量</li>
           </ol>
         </section>
 
         <section>
-          <h3>选择操作</h3>
+          <h3>选择与排序</h3>
           <ul>
             <li><strong>单选</strong>: 单击变量行</li>
             <li><strong>多选 (Ctrl)</strong>: 按住 Ctrl + 单击</li>
             <li><strong>范围选择 (Shift)</strong>: 按住 Shift + 单击</li>
             <li><strong>全选</strong>: Ctrl + A</li>
             <li><strong>键盘导航</strong>: ↑↓ 方向键</li>
+            <li><strong>单列排序</strong>: 点击列头</li>
+            <li><strong>多列排序</strong>: Shift + 点击列头（数字表示优先级）</li>
           </ul>
         </section>
 
@@ -46,10 +48,14 @@
         </section>
 
         <section>
-          <h3>变量类型</h3>
+          <h3>编辑与复制</h3>
           <ul>
-            <li><strong>观测变量 (MEASUREMENT)</strong>: 只读，用于监控变量值</li>
-            <li><strong>标定变量 (CHARACTERISTIC)</strong>: 可写，用于标定参数</li>
+            <li><strong>编辑变量</strong>: 在 A2L 面板选中单个变量，下方编辑区域修改属性</li>
+            <li><strong>复制名称</strong>: 右键变量 → 复制名称</li>
+            <li><strong>复制地址</strong>: 右键变量 → 复制地址</li>
+            <li><strong>删除变量</strong>: 右键变量 → 删除变量</li>
+            <li><strong>调整编辑区高度</strong>: 拖拽编辑区域上方的分隔条</li>
+            <li><strong>调整列宽</strong>: 拖拽列标题之间的分隔线</li>
           </ul>
         </section>
 
@@ -59,7 +65,16 @@
           <ul>
             <li>首次打开 ELF 需要生成数据包（解析约 160 秒）</li>
             <li>后续加载只需约 150 毫秒</li>
+            <li>可直接打开数据包文件，无需 ELF 源文件</li>
             <li>可通过"重新生成缓存"更新数据包</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>变量类型说明</h3>
+          <ul>
+            <li><strong>观测变量 (MEASUREMENT)</strong>: 只读，用于监控变量值</li>
+            <li><strong>标定变量 (CHARACTERISTIC)</strong>: 可写，用于标定参数</li>
           </ul>
         </section>
 
@@ -86,7 +101,12 @@
 
         <section>
           <h3>主题切换</h3>
-          <p>点击右上角 🎨 按钮切换主题：Dark / Light / Midnight / Ocean</p>
+          <p>点击右上角 🎨 按钮切换主题：Dark / Light / Midnight / Ocean（自动保存）</p>
+        </section>
+
+        <section>
+          <h3>字节序设置</h3>
+          <p>点击 Header 右侧「小端」/「大端」按钮切换字节序</p>
         </section>
       </div>
     </div>
