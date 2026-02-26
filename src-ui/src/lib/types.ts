@@ -64,3 +64,8 @@ export interface SaveResult {
   added: number;
   skipped: number;
 }
+
+export interface UpdateAddressResult {
+  updated: number;
+  skipped: number;
+}

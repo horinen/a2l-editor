@@ -4,7 +4,7 @@
   import { themes, themeNames, applyTheme, cycleTheme } from '$lib/themes';
   import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading } from '$lib/stores';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { loadElf, loadPackage, loadA2l, setEndianness } from '$lib/commands';
+  import { loadElf, loadPackage, loadA2l, setEndianness, updateA2lAddresses } from '$lib/commands';
   import { 
     elfPath, elfFileName, elfTotalCount, elfEntries,
     packagePath, a2lVariables, a2lNames
@@ -110,6 +110,31 @@
     await setEndianness(next);
   }
 
+  async function handleUpdateAddresses() {
+    if (!$a2lPath) {
+      statusMessage.set('❌ 请先选择目标 A2L 文件');
+      showMenu = false;
+      return;
+    }
+    if (!$elfPath) {
+      statusMessage.set('❌ 请先加载 ELF 文件');
+      showMenu = false;
+      return;
+    }
+    isLoading.set(true);
+    statusMessage.set('⏳ 正在更新地址...');
+    try {
+      const result = await updateA2lAddresses();
+      const vars = await searchA2lVariables('', 0, 10000);
+      a2lVariables.set(vars);
+      statusMessage.set(`✅ 已更新 ${result.updated} 个地址，跳过 ${result.skipped} 个`);
+    } catch (e) {
+      statusMessage.set(`❌ 更新失败: ${e}`);
+    }
+    isLoading.set(false);
+    showMenu = false;
+  }
+
   function closeMenu() {
     showMenu = false;
   }
@@ -129,6 +154,7 @@
           <button onclick={handleOpenPackage}>📦 打开数据包...</button>
           <button onclick={handleSelectA2l}>📄 选择目标 A2L...</button>
           <div class="divider"></div>
+          <button onclick={handleUpdateAddresses}>🔄 更新 A2L 地址</button>
           <button onclick={() => { showGenerateDialog.set(true); showMenu = false; }}>🔄 重新生成缓存</button>
         </div>
       {/if}

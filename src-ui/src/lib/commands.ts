@@ -8,6 +8,7 @@ import type {
   A2lLoadResult, 
   ExportResult,
   SaveResult,
+  UpdateAddressResult,
   ExportMode 
 } from './types';
 
@@ -79,4 +80,8 @@ export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResu
 
 export async function setEndianness(endianness: 'little' | 'big'): Promise<void> {
   return invoke('set_endianness', { endianness });
+}
+
+export async function updateA2lAddresses(): Promise<UpdateAddressResult> {
+  return invoke('update_a2l_addresses');
 }

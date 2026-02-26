@@ -471,3 +471,70 @@ pub fn set_endianness(endianness: String, state: State<Mutex<AppState>>) -> Resu
     state.endianness = endianness;
     Ok(())
 }
+
+#[derive(Serialize)]
+pub struct UpdateAddressResult {
+    pub updated: usize,
+    pub skipped: usize,
+}
+
+#[tauri::command]
+pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddressResult, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+
+    let a2l_path = state.a2l_path.as_ref().ok_or("未选择目标 A2L 文件")?;
+    let store = state.store.as_ref().ok_or("未加载 ELF 文件")?;
+
+    if state.a2l_variables.is_empty() {
+        return Err("A2L 文件中没有变量".to_string());
+    }
+
+    let mut edits: Vec<VariableEdit> = Vec::new();
+    let mut updated = 0;
+    let mut skipped = 0;
+
+    for var in &state.a2l_variables {
+        if let Some(entry) = store.get_by_name(&var.name) {
+            let new_address = format!("0x{:08X}", entry.address);
+            edits.push(VariableEdit {
+                action: "modify".to_string(),
+                original_name: var.name.clone(),
+                changes: Some(VariableChanges {
+                    name: None,
+                    address: Some(new_address),
+                    data_type: None,
+                    var_type: None,
+                    bit_mask: None,
+                }),
+                entry: None,
+                export_mode: None,
+            });
+            updated += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+
+    if edits.is_empty() {
+        return Ok(UpdateAddressResult {
+            updated: 0,
+            skipped,
+        });
+    }
+
+    let content =
+        std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+
+    let (new_content, _) = A2lGenerator::apply_changes(&content, &edits)
+        .map_err(|e| format!("更新地址失败: {}", e))?;
+
+    std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
+
+    let variables = A2lParser::parse_all_variables(
+        &std::fs::read_to_string(a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?,
+    );
+    state.a2l_variables = variables;
+    state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
+
+    Ok(UpdateAddressResult { updated, skipped })
+}
