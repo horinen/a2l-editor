@@ -1,6 +1,6 @@
 # A2L Editor Tauri 版本 - 任务清单
 
-**状态**: ✅ v0.1.2 已完成 (DWARF 全局变量提取)
+**状态**: ✅ v0.1.3 已完成 (转化系数编辑功能)
 **更新**: 2026-02-27
 
 ---
@@ -39,9 +39,9 @@
 | 11. 移除延迟保存 | 9/9 | ✅ 完成 |
 | 12. A2L 格式修复 | 14/14 | ✅ 完成 |
 | 13. DWARF 解析优化 | 11/13 | ✅ 完成 |
-| 14. 转化系数编辑功能 | 0/24 | 📋 规划中 |
+| 14. 转化系数编辑功能 | 24/24 | ✅ 完成 |
 | 15. DWARF 全局变量提取 | 6/6 | ✅ 完成 |
-| **总进度**: 147/197 (75%)
+| **总进度**: 171/197 (87%)
 
 **测试通过率**: 100% ✅
 
@@ -395,37 +395,37 @@
 ## 阶段 14: 转化系数编辑功能
 
 ### 14.1 后端核心修改
-- [ ] 14.1.1 A2lVariable 添加 compu_method, f, offset, unit 字段
-- [ ] 14.1.2 VariableChanges 添加 compu_method, f, offset, unit 字段
-- [ ] 14.1.3 实现 parse_compu_methods() 解析函数
-- [ ] 14.1.4 修改 parse_variable_block() 解析 COMPU_METHOD 引用和系数
-- [ ] 14.1.5 实现 generate_compu_method_name() 生成共享名称
-- [ ] 14.1.6 实现 generate_compu_method_block() 生成 COMPU_METHOD 块
-- [ ] 14.1.7 修改 generate_measurement_block() 支持 COMPU_METHOD 参数
-- [ ] 14.1.8 修改 generate_characteristic_block() 支持 COMPU_METHOD 参数
-- [ ] 14.1.9 修改 apply_changes_to_block() 支持 COMPU_METHOD 替换
-- [ ] 14.1.10 修改 apply_changes() 实现共享 COMPU_METHOD 逻辑
+- [x] 14.1.1 A2lVariable 添加 compu_method, f, offset, unit 字段 ✅
+- [x] 14.1.2 VariableChanges 添加 compu_method, f, offset, unit 字段 ✅
+- [x] 14.1.3 实现 parse_compu_methods() 解析函数 ✅
+- [x] 14.1.4 修改 parse_variable_block() 解析 COMPU_METHOD 引用和系数 ✅
+- [x] 14.1.5 实现 generate_compu_method_name() 生成共享名称 ✅
+- [x] 14.1.6 实现 generate_compu_method_block() 生成 COMPU_METHOD 块 ✅
+- [x] 14.1.7 修改 generate_measurement_block() 支持 COMPU_METHOD 参数 ✅
+- [x] 14.1.8 修改 generate_characteristic_block() 支持 COMPU_METHOD 参数 ✅
+- [x] 14.1.9 修改 apply_changes_to_block() 支持 COMPU_METHOD 替换 ✅
+- [x] 14.1.10 修改 apply_changes() 实现共享 COMPU_METHOD 逻辑 ✅
 
 ### 14.2 Tauri 命令层
-- [ ] 14.2.1 VariableInfo 添加 compu_method, f, offset, unit 字段
-- [ ] 14.2.2 VariableEditInput 添加 compu_method, f, offset, unit 字段
-- [ ] 14.2.3 更新 save_a2l_changes 传递新字段
+- [x] 14.2.1 VariableInfo 添加 compu_method, f, offset, unit 字段 ✅
+- [x] 14.2.2 VariableEditInput 添加 compu_method, f, offset, unit 字段 ✅
+- [x] 14.2.3 更新 save_a2l_changes 传递新字段 ✅
 
 ### 14.3 前端修改
-- [ ] 14.3.1 types.ts 中 A2lVariable 添加新字段
-- [ ] 14.3.2 types.ts 中 A2lVariableEdit 添加新字段
-- [ ] 14.3.3 A2lEditor.svelte 添加 F 输入框
-- [ ] 14.3.4 A2lEditor.svelte 添加 OFFSET 输入框
-- [ ] 14.3.5 A2lEditor.svelte 添加 Unit 输入框
-- [ ] 14.3.6 修改保存逻辑包含新字段
+- [x] 14.3.1 types.ts 中 A2lVariable 添加新字段 ✅
+- [x] 14.3.2 types.ts 中 A2lVariableEdit 添加新字段 ✅
+- [x] 14.3.3 A2lEditor.svelte 添加 F 输入框 ✅
+- [x] 14.3.4 A2lEditor.svelte 添加 OFFSET 输入框 ✅
+- [x] 14.3.5 A2lEditor.svelte 添加 Unit 输入框 ✅
+- [x] 14.3.6 修改保存逻辑包含新字段 ✅
 
 ### 14.4 测试验证
-- [ ] 14.4.1 测试新建变量设置 F/OFFSET/Unit
-- [ ] 14.4.2 测试修改已有变量
-- [ ] 14.4.3 测试共享 COMPU_METHOD
-- [ ] 14.4.4 测试解析已有 COMPU_METHOD
-- [ ] 14.4.5 运行 cargo test
-- [ ] 14.4.6 运行 npm run check
+- [x] 14.4.1 测试新建变量设置 F/OFFSET/Unit ✅
+- [x] 14.4.2 测试修改已有变量 ✅
+- [x] 14.4.3 测试共享 COMPU_METHOD ✅
+- [x] 14.4.4 测试解析已有 COMPU_METHOD ✅
+- [x] 14.4.5 运行 cargo test ✅
+- [x] 14.4.6 运行 npm run check ✅
 
 ---
 
@@ -452,6 +452,7 @@
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-02-27 | **转化系数编辑功能 (v0.1.3)**:<br>- A2lVariable/VariableChanges 添加 compu_method, f, offset, unit 字段<br>- 实现 parse_compu_methods() 解析 COMPU_METHOD 块<br>- 修改 parse_variable_block() 解析 COMPU_METHOD 引用和系数<br>- 实现 generate_compu_method_name() 生成共享名称 (如 CM_F0_5_O10)<br>- 实现 generate_compu_method_block() 生成 COMPU_METHOD 块<br>- 修改 generate_measurement/characteristic_block_with_compu() 支持 COMPU_METHOD<br>- 修改 apply_changes() 实现共享 COMPU_METHOD 逻辑<br>- 前端 A2lEditor 添加 F/OFFSET/Unit 输入框 |
 | 2026-02-27 | **DWARF 全局变量提取完成**:<br>- 新增 DwarfVariable 结构体存储全局变量<br>- 实现 parse_location_static() 解析 DW_OP_addr 提取地址<br>- 修改 parse_variable() 提取变量地址和类型信息<br>- 修改 elf.rs 优先使用 DWARF 全局变量<br>- static 全局变量及其成员现在可以正确搜索<br>- 变量数量从 ~8800 提升到 ~5500 (过滤 size=0 后) |
 | 2026-02-27 | **DWARF 全局变量提取问题分析**:<br>- 发现某些 static 全局变量在 DWARF 中存在，但不在 ELF 符号表<br>- 对比: ELF 符号表 8,857 变量 vs DWARF 17,157 变量<br>- 根因: static 全局变量或被优化的符号不会出现在 ELF 符号表<br>- 方案: 优先从 DWARF 提取全局变量，ELF 符号表作为无 DWARF 时的回退<br>- 影响文件: dwarf.rs, elf.rs |
 | 2026-02-27 | **DWARF 解析性能优化完成**:<br>- 新增 CompositeBuilder 数据结构用于单次遍历<br>- 实现栈式单次遍历算法，复杂度从 O(n²) 降为 O(n)<br>- 删除 5 个重复遍历函数（struct/union/enum/array 成员解析）<br>- 代码量减少约 200 行<br>- 预期性能提升：中型 ELF (1000 结构体) 从 ~2s 到 ~50ms |
