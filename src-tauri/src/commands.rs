@@ -92,6 +92,10 @@ pub struct VariableInfo {
     pub data_type: String,
     pub var_type: String,
     pub bit_mask: Option<String>,
+    pub compu_method: Option<String>,
+    pub f: Option<f64>,
+    pub offset: Option<f64>,
+    pub unit: Option<String>,
 }
 
 impl From<&A2lVariable> for VariableInfo {
@@ -102,6 +106,10 @@ impl From<&A2lVariable> for VariableInfo {
             data_type: var.data_type.clone(),
             var_type: var.var_type.clone(),
             bit_mask: var.bit_mask.clone(),
+            compu_method: var.compu_method.clone(),
+            f: var.f,
+            offset: var.offset,
+            unit: var.unit.clone(),
         }
     }
 }
@@ -398,6 +406,10 @@ pub struct VariableEditInput {
     pub data_type: Option<String>,
     pub var_type: Option<String>,
     pub bit_mask: Option<String>,
+    pub compu_method: Option<String>,
+    pub f: Option<f64>,
+    pub offset: Option<f64>,
+    pub unit: Option<String>,
     pub entry: Option<EntryInfo>,
     pub export_mode: Option<String>,
 }
@@ -421,6 +433,10 @@ pub fn save_a2l_changes(
                 || e.data_type.is_some()
                 || e.var_type.is_some()
                 || e.bit_mask.is_some()
+                || e.compu_method.is_some()
+                || e.f.is_some()
+                || e.offset.is_some()
+                || e.unit.is_some()
             {
                 Some(VariableChanges {
                     name: e.name,
@@ -428,6 +444,10 @@ pub fn save_a2l_changes(
                     data_type: e.data_type,
                     var_type: e.var_type,
                     bit_mask: e.bit_mask,
+                    compu_method: e.compu_method,
+                    f: e.f,
+                    offset: e.offset,
+                    unit: e.unit,
                 })
             } else {
                 None
@@ -505,6 +525,10 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
                     data_type: None,
                     var_type: None,
                     bit_mask: None,
+                    compu_method: None,
+                    f: None,
+                    offset: None,
+                    unit: None,
                 }),
                 entry: None,
                 export_mode: None,

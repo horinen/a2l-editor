@@ -12,6 +12,10 @@ pub struct VariableChanges {
     pub data_type: Option<String>,
     pub var_type: Option<String>,
     pub bit_mask: Option<String>,
+    pub compu_method: Option<String>,
+    pub f: Option<f64>,
+    pub offset: Option<f64>,
+    pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +54,14 @@ pub struct A2lGenerator {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompuMethod {
+    pub name: String,
+    pub f: f64,
+    pub offset: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct AppendResult {
     pub added: usize,
     pub skipped: usize,
@@ -68,6 +80,10 @@ pub struct A2lVariable {
     pub var_type: String,
     pub data_type: String,
     pub bit_mask: Option<String>,
+    pub compu_method: Option<String>,
+    pub f: Option<f64>,
+    pub offset: Option<f64>,
+    pub unit: Option<String>,
 }
 
 impl A2lGenerator {
@@ -159,10 +175,16 @@ impl A2lGenerator {
     }
 
     fn generate_measurement_block(entry: &A2lEntry) -> String {
+        Self::generate_measurement_block_with_compu(entry, None)
+    }
+
+    fn generate_measurement_block_with_compu(
+        entry: &A2lEntry,
+        compu_method: Option<&str>,
+    ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let format_str = Self::get_format_string(a2l_type);
 
-        // bitfield 使用 bit_size 计算上限
         let (min_val, max_val) = if entry.is_bitfield() {
             let size = entry.bit_size.unwrap();
             ("0".to_string(), format!("{}", Self::get_bitfield_max(size)))
@@ -171,6 +193,7 @@ impl A2lGenerator {
             (min.to_string(), max.to_string())
         };
 
+        let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -178,11 +201,10 @@ impl A2lGenerator {
             entry.full_name
         ));
         output.push_str(&format!(
-            "      {} NO_COMPU_METHOD 0 0 {} {}\n",
-            a2l_type, min_val, max_val
+            "      {} {} 0 0 {} {}\n",
+            a2l_type, compu, min_val, max_val
         ));
 
-        // bitfield 添加 BIT_MASK
         if entry.is_bitfield() {
             let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
@@ -198,10 +220,16 @@ impl A2lGenerator {
     }
 
     fn generate_characteristic_block(entry: &A2lEntry) -> String {
+        Self::generate_characteristic_block_with_compu(entry, None)
+    }
+
+    fn generate_characteristic_block_with_compu(
+        entry: &A2lEntry,
+        compu_method: Option<&str>,
+    ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let record_layout = Self::get_record_layout(a2l_type);
 
-        // bitfield 使用 bit_size 计算上限
         let max_val = if entry.is_bitfield() {
             let size = entry.bit_size.unwrap();
             format!("{}", Self::get_bitfield_max(size))
@@ -210,6 +238,7 @@ impl A2lGenerator {
             max.to_string()
         };
 
+        let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -217,11 +246,10 @@ impl A2lGenerator {
             entry.full_name
         ));
         output.push_str(&format!(
-            "      VALUE 0x{:08X} {} 0 NO_COMPU_METHOD 0 {}\n",
-            entry.address, record_layout, max_val
+            "      VALUE 0x{:08X} {} 0 {} 0 {}\n",
+            entry.address, record_layout, compu, max_val
         ));
 
-        // bitfield 添加 BIT_MASK
         if entry.is_bitfield() {
             let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
@@ -232,6 +260,40 @@ impl A2lGenerator {
         output.push_str("    /end CHARACTERISTIC\n\n");
 
         output
+    }
+
+    pub fn generate_compu_method_name(f: f64, offset: f64) -> String {
+        let format_f = if f == f.trunc() {
+            format!("{}", f as i64)
+        } else {
+            format!("{}", f).replace('.', "_")
+        };
+        let format_offset = if offset == offset.trunc() {
+            format!("{}", offset as i64)
+        } else {
+            format!("{}", offset).replace('.', "_")
+        };
+        let offset_sign = if offset < 0.0 { "N" } else { "O" };
+        format!(
+            "CM_F{}_{}{}",
+            format_f,
+            offset_sign,
+            format_offset.replace('-', "")
+        )
+    }
+
+    pub fn generate_compu_method_block(name: &str, f: f64, offset: f64, unit: &str) -> String {
+        let display_unit = if unit.is_empty() { "" } else { unit };
+        let format_str = Self::get_format_string_for_compu();
+        let description = format!("y = {} * x + {}", f, offset);
+        format!(
+            "    /begin COMPU_METHOD\n      {} \"{}\"\n      LINEAR \"{}\" \"{}\" \"{}\"\n      COEFFS {} {} 0.0 0.0 0.0 0.0\n    /end COMPU_METHOD\n\n",
+            name, description, format_str, display_unit, display_unit, f, offset
+        )
+    }
+
+    fn get_format_string_for_compu() -> &'static str {
+        "%10.4"
     }
 
     fn get_record_layout(a2l_type: &str) -> &'static str {
@@ -584,10 +646,12 @@ impl A2lGenerator {
         let new_address = changes.address.as_deref().unwrap_or("");
         let new_data_type = changes.data_type.as_deref().unwrap_or("");
         let new_bit_mask = changes.bit_mask.as_deref().unwrap_or("");
+        let new_compu_method = changes.compu_method.as_deref().unwrap_or("");
 
         let mut original_name = String::new();
         let mut original_address = String::new();
         let mut original_data_type = String::new();
+        let mut original_compu_method = String::new();
         let mut has_bit_mask = false;
         let mut bit_mask_indent = 0;
         let mut ecu_address_indent = 0;
@@ -636,6 +700,15 @@ impl A2lGenerator {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if !parts.is_empty() && a2l_types.contains(&parts[0]) {
                 original_data_type = parts[0].to_string();
+                if parts.len() >= 2 {
+                    original_compu_method = parts[1].to_string();
+                }
+            }
+            if trimmed.starts_with("VALUE") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    original_compu_method = parts[3].to_string();
+                }
             }
         }
 
@@ -654,11 +727,19 @@ impl A2lGenerator {
         } else {
             &original_data_type
         };
+        let final_compu_method = if !new_compu_method.is_empty() {
+            new_compu_method
+        } else {
+            &original_compu_method
+        };
 
         let begin_re = Regex::new(r"^(\s*/begin\s+(?:MEASUREMENT|CHARACTERISTIC)\s+)\S+")?;
         let ecu_addr_re = Regex::new(r"^(\s*ECU_ADDRESS\s+)(0x[0-9a-fA-F]+)")?;
         let link_map_addr_re = Regex::new(r#"^(.*LINK_MAP\s+"[^"]+"\s+)(0x[0-9a-fA-F]+)(.*)$"#)?;
-        let data_type_re = Regex::new(&format!("^(\\s*)({})(\\s+.*)$", original_data_type))?;
+        let data_type_re = Regex::new(&format!(
+            "^(\\s*)({})(\\s+)(\\S+)(\\s+.*)$",
+            original_data_type
+        ))?;
         let bit_mask_re = Regex::new(r"^(\s*BIT_MASK\s+)(0x[0-9a-fA-F]+)")?;
 
         let mut result = String::new();
@@ -711,7 +792,23 @@ impl A2lGenerator {
 
             if !new_data_type.is_empty() && !original_data_type.is_empty() {
                 if let Some(caps) = data_type_re.captures(line) {
-                    result.push_str(&format!("{}{}{}\n", &caps[1], final_data_type, &caps[3]));
+                    result.push_str(&format!(
+                        "{}{}{}{}{}\n",
+                        &caps[1], final_data_type, &caps[3], final_compu_method, &caps[5]
+                    ));
+                    continue;
+                }
+            }
+
+            if !new_compu_method.is_empty()
+                && !original_data_type.is_empty()
+                && new_data_type.is_empty()
+            {
+                if let Some(caps) = data_type_re.captures(line) {
+                    result.push_str(&format!(
+                        "{}{}{}{}{}\n",
+                        &caps[1], &caps[2], &caps[3], final_compu_method, &caps[5]
+                    ));
                     continue;
                 }
             }
@@ -745,6 +842,8 @@ impl A2lGenerator {
 
     /// 统一应用所有变更（修改、删除、添加）
     pub fn apply_changes(content: &str, edits: &[VariableEdit]) -> Result<(String, SaveResult)> {
+        use std::collections::HashMap;
+
         let mut result = content.to_string();
         let mut save_result = SaveResult {
             modified: 0,
@@ -755,7 +854,74 @@ impl A2lGenerator {
 
         let existing_names = Self::parse_existing_names(content);
 
+        let existing_compu_methods = A2lParser::parse_compu_methods(content);
+        let mut compu_method_map: HashMap<String, String> = existing_compu_methods
+            .iter()
+            .map(|m| {
+                let key = format!("{:.10}_{:.10}", m.f, m.offset);
+                (key, m.name.clone())
+            })
+            .collect();
+
+        let mut new_compu_methods_to_add: Vec<(String, f64, f64, String)> = Vec::new();
+
+        let mut modified_edits: Vec<VariableEdit> = Vec::new();
         for edit in edits {
+            let mut modified_edit = edit.clone();
+            if let Some(ref changes) = edit.changes {
+                if let (Some(f), Some(offset)) = (changes.f, changes.offset) {
+                    let key = format!("{:.10}_{:.10}", f, offset);
+                    let compu_name = if let Some(existing_name) = compu_method_map.get(&key) {
+                        existing_name.clone()
+                    } else {
+                        let new_name = Self::generate_compu_method_name(f, offset);
+                        compu_method_map.insert(key, new_name.clone());
+                        let unit = changes.unit.clone().unwrap_or_default();
+                        new_compu_methods_to_add.push((new_name.clone(), f, offset, unit));
+                        new_name
+                    };
+                    modified_edit.changes = Some(VariableChanges {
+                        compu_method: Some(compu_name),
+                        ..changes.clone()
+                    });
+                }
+            }
+            modified_edits.push(modified_edit);
+        }
+
+        for (name, f, offset, unit) in &new_compu_methods_to_add {
+            let block = Self::generate_compu_method_block(name, *f, *offset, unit);
+            let insert_pos = result
+                .rfind("/end COMPU_METHOD")
+                .or_else(|| result.find("/begin MEASUREMENT"))
+                .or_else(|| result.find("/begin CHARACTERISTIC"))
+                .or_else(|| result.rfind("/end MODULE"))
+                .unwrap_or(result.len());
+
+            let actual_insert_pos = {
+                let before = &result[..insert_pos];
+                if let Some(last_newline) = before.rfind('\n') {
+                    let line_start = last_newline + 1;
+                    let prefix = &result[line_start..insert_pos];
+                    if prefix.chars().all(|c| c.is_whitespace()) {
+                        line_start
+                    } else {
+                        insert_pos
+                    }
+                } else {
+                    0
+                }
+            };
+
+            result = format!(
+                "{}{}{}",
+                &result[..actual_insert_pos],
+                block,
+                &result[actual_insert_pos..]
+            );
+        }
+
+        for edit in &modified_edits {
             match edit.action.as_str() {
                 "modify" => {
                     if let Some(ref changes) = edit.changes {
@@ -786,10 +952,22 @@ impl A2lGenerator {
                                 Some("characteristic") => ExportKind::Characteristic,
                                 _ => ExportKind::Measurement,
                             };
+                            let compu_method = edit
+                                .changes
+                                .as_ref()
+                                .and_then(|c| c.compu_method.as_deref());
                             let block = match kind {
-                                ExportKind::Measurement => Self::generate_measurement_block(&entry),
+                                ExportKind::Measurement => {
+                                    Self::generate_measurement_block_with_compu(
+                                        &entry,
+                                        compu_method,
+                                    )
+                                }
                                 ExportKind::Characteristic => {
-                                    Self::generate_characteristic_block(&entry)
+                                    Self::generate_characteristic_block_with_compu(
+                                        &entry,
+                                        compu_method,
+                                    )
                                 }
                             };
                             let insert_pos = result
@@ -799,7 +977,6 @@ impl A2lGenerator {
                                 .or_else(|| result.rfind("/end MODULE"))
                                 .unwrap_or(result.len());
 
-                            // 修复缩进问题：如果插入位置所在行只有空白字符，则移动到行首
                             let actual_insert_pos = {
                                 let before = &result[..insert_pos];
                                 if let Some(last_newline) = before.rfind('\n') {
@@ -918,6 +1095,7 @@ impl A2lParser {
         let mut address = None;
         let mut data_type = String::new();
         let mut bit_mask = None;
+        let mut compu_method = None;
         let mut found_first_name = false;
 
         let a2l_types = [
@@ -980,6 +1158,9 @@ impl A2lParser {
                 let possible_type = parts[0];
                 if a2l_types.contains(&possible_type) {
                     data_type = possible_type.to_string();
+                    if parts.len() >= 3 && parts[1] != "0" && !parts[1].starts_with("0x") {
+                        compu_method = Some(parts[1].to_string());
+                    }
                 }
             }
 
@@ -994,6 +1175,9 @@ impl A2lParser {
                     if value_pos + 1 < parts.len() {
                         address = Some(parts[value_pos + 1].to_string());
                     }
+                    if value_pos + 4 < parts.len() {
+                        compu_method = Some(parts[value_pos + 3].to_string());
+                    }
                 }
             }
 
@@ -1004,12 +1188,135 @@ impl A2lParser {
             }
         }
 
+        let (f, offset, unit) = if let Some(ref cm) = compu_method {
+            if cm != "NO_COMPU_METHOD" {
+                Self::parse_compu_method_coeffs(cm)
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
         A2lVariable {
             name,
             address,
             var_type: block_type.to_string(),
             data_type,
             bit_mask,
+            compu_method,
+            f,
+            offset,
+            unit,
+        }
+    }
+
+    pub fn parse_compu_methods(content: &str) -> Vec<CompuMethod> {
+        let mut methods = Vec::new();
+        let mut in_compu_method = false;
+        let mut current_block_lines = Vec::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+
+            if trimmed.starts_with("/begin COMPU_METHOD") {
+                in_compu_method = true;
+                current_block_lines.clear();
+                current_block_lines.push(trimmed);
+                continue;
+            }
+
+            if trimmed.starts_with("/end COMPU_METHOD") {
+                if in_compu_method && !current_block_lines.is_empty() {
+                    if let Some(method) = Self::parse_compu_method_block(&current_block_lines) {
+                        methods.push(method);
+                    }
+                }
+                in_compu_method = false;
+                current_block_lines.clear();
+                continue;
+            }
+
+            if in_compu_method {
+                current_block_lines.push(trimmed);
+            }
+        }
+
+        methods
+    }
+
+    fn parse_compu_method_block(block_lines: &[&str]) -> Option<CompuMethod> {
+        let mut name = String::new();
+        let mut f = 1.0;
+        let mut offset = 0.0;
+        let mut unit = String::new();
+
+        for line in block_lines {
+            let trimmed = line.trim();
+
+            if trimmed.starts_with("/begin COMPU_METHOD") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    name = parts[2].to_string();
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("COEFFS") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    f = parts[1].parse().unwrap_or(1.0);
+                    offset = parts[2].parse().unwrap_or(0.0);
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("LINEAR") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    unit = parts[3].trim_matches('"').to_string();
+                }
+                continue;
+            }
+        }
+
+        if name.is_empty() || name == "NO_COMPU_METHOD" {
+            None
+        } else {
+            Some(CompuMethod {
+                name,
+                f,
+                offset,
+                unit,
+            })
+        }
+    }
+
+    fn parse_compu_method_coeffs(method_name: &str) -> (Option<f64>, Option<f64>, Option<String>) {
+        if method_name == "NO_COMPU_METHOD" || !method_name.starts_with("CM_F") {
+            return (None, None, None);
+        }
+
+        let rest = method_name.strip_prefix("CM_F").unwrap_or("");
+        let parts: Vec<&str> = rest.split('_').collect();
+
+        if parts.len() >= 2 {
+            let f_str = parts[0].replace('_', ".");
+            let f = f_str.parse::<f64>().ok();
+
+            let offset_part = parts[1..].join("_");
+            let offset_str = if offset_part.starts_with('N') {
+                format!("-{}", offset_part[1..].replace('_', "."))
+            } else if offset_part.starts_with('O') {
+                offset_part[1..].replace('_', ".")
+            } else {
+                offset_part.replace('_', ".")
+            };
+            let offset = offset_str.parse::<f64>().ok();
+
+            (f, offset, None)
+        } else {
+            (None, None, None)
         }
     }
 }

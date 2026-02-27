@@ -28,13 +28,19 @@
     address: string;
     data_type: string;
     bit_mask: string;
-  }>({ name: '', address: '', data_type: '', bit_mask: '' });
+    f: string;
+    offset: string;
+    unit: string;
+  }>({ name: '', address: '', data_type: '', bit_mask: '', f: '', offset: '', unit: '' });
 
   let originalValues = $state<{
     name: string;
     address: string;
     data_type: string;
     bit_mask: string;
+    f: string;
+    offset: string;
+    unit: string;
   } | null>(null);
 
   let isSaving = $state(false);
@@ -52,12 +58,18 @@
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
         bit_mask: selectedVariable.bit_mask || getDefaultBitMask(selectedVariable.data_type),
+        f: selectedVariable.f != null ? String(selectedVariable.f) : '',
+        offset: selectedVariable.offset != null ? String(selectedVariable.offset) : '',
+        unit: selectedVariable.unit || '',
       };
       originalValues = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
         data_type: selectedVariable.data_type,
         bit_mask: selectedVariable.bit_mask || getDefaultBitMask(selectedVariable.data_type),
+        f: selectedVariable.f != null ? String(selectedVariable.f) : '',
+        offset: selectedVariable.offset != null ? String(selectedVariable.offset) : '',
+        unit: selectedVariable.unit || '',
       };
     } else {
       originalValues = null;
@@ -69,7 +81,10 @@
       editBuffer.name !== originalValues.name ||
       editBuffer.address !== originalValues.address ||
       editBuffer.data_type !== originalValues.data_type ||
-      editBuffer.bit_mask !== originalValues.bit_mask
+      editBuffer.bit_mask !== originalValues.bit_mask ||
+      editBuffer.f !== originalValues.f ||
+      editBuffer.offset !== originalValues.offset ||
+      editBuffer.unit !== originalValues.unit
     )
   );
 
@@ -90,12 +105,42 @@
       if (editBuffer.data_type !== originalValues.data_type) change.data_type = editBuffer.data_type;
       if (editBuffer.bit_mask !== originalValues.bit_mask) change.bit_mask = editBuffer.bit_mask;
 
+      const fChanged = editBuffer.f !== originalValues.f;
+      const offsetChanged = editBuffer.offset !== originalValues.offset;
+      const unitChanged = editBuffer.unit !== originalValues.unit;
+
+      if (fChanged || offsetChanged) {
+        const fVal = editBuffer.f ? parseFloat(editBuffer.f) : null;
+        const offsetVal = editBuffer.offset ? parseFloat(editBuffer.offset) : null;
+        if (fVal !== null && offsetVal !== null) {
+          change.f = fVal;
+          change.offset = offsetVal;
+        }
+      }
+      if (unitChanged) {
+        change.unit = editBuffer.unit || undefined;
+      }
+
       await saveA2lChanges([change]);
       
       const variables = await searchA2lVariables('', 0, 10000);
       a2lVariables.set(variables);
       
-      originalValues = { ...editBuffer };
+      const origName = originalValues?.name || '';
+      const updatedVar = variables.find((v: A2lVariable) => v.name === (change.name || origName));
+      if (updatedVar) {
+        originalValues = {
+          name: updatedVar.name,
+          address: updatedVar.address || '',
+          data_type: updatedVar.data_type,
+          bit_mask: updatedVar.bit_mask || getDefaultBitMask(updatedVar.data_type),
+          f: updatedVar.f != null ? String(updatedVar.f) : '',
+          offset: updatedVar.offset != null ? String(updatedVar.offset) : '',
+          unit: updatedVar.unit || '',
+        };
+      } else {
+        originalValues = { ...editBuffer };
+      }
       
       statusMessage.set('✅ 已保存');
     } catch (e) {
@@ -151,6 +196,43 @@
           bind:value={editBuffer.bit_mask}
           class="field-input"
           placeholder="0x... (可选)"
+          disabled={isSaving}
+        />
+      </label>
+    </div>
+
+    <div class="section-divider">
+      <span class="section-label">转化系数 (COMPU_METHOD)</span>
+    </div>
+
+    <div class="editor-row">
+      <label>
+        <span class="field-label">F (斜率)</span>
+        <input 
+          type="text" 
+          bind:value={editBuffer.f}
+          class="field-input"
+          placeholder="如 0.5, 1.0, 0.01"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span class="field-label">OFFSET</span>
+        <input 
+          type="text" 
+          bind:value={editBuffer.offset}
+          class="field-input"
+          placeholder="如 0, -273.15, 10"
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span class="field-label">Unit</span>
+        <input 
+          type="text" 
+          bind:value={editBuffer.unit}
+          class="field-input"
+          placeholder="如 °C, rpm, ms"
           disabled={isSaving}
         />
       </label>
@@ -304,5 +386,20 @@
   .btn-primary:hover:not(:disabled) {
     opacity: 0.9;
     background: var(--accent);
+  }
+
+  .section-divider {
+    display: flex;
+    align-items: center;
+    margin: 8px 0 6px 0;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border);
+  }
+
+  .section-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 </style>
