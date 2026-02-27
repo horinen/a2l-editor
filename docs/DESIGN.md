@@ -508,6 +508,11 @@ interface A2lVariable {
   address: string | null;
   data_type: string;     // ULONG, FLOAT32_IEEE 等
   var_type: 'MEASUREMENT' | 'CHARACTERISTIC';  // 观测/标定类型
+  bit_mask: string | null;
+  compu_method: string | null;  // 引用的 COMPU_METHOD 名称
+  f: number | null;             // 斜率系数
+  offset: number | null;        // 偏移量
+  unit: string | null;          // 物理单位
 }
 
 interface LoadResult {

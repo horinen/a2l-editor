@@ -1,4 +1,4 @@
-use crate::dwarf::{analyze_variables_with_dwarf, DwarfParser};
+use crate::dwarf::DwarfParser;
 use crate::types::{
     infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, TypeInfo, TypeKind, Variable,
     MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
@@ -52,6 +52,107 @@ impl ElfParser {
 
         let obj = object::File::parse(&*mmap).context("无法解析 ELF 文件")?;
 
+        let (variables, has_dwarf, dwarf_stats, type_cache, a2l_entries) = if deep {
+            let parser = DwarfParser::parse(&mmap).unwrap_or_else(|_| DwarfParser::new());
+            let has_dwarf = parser.has_dwarf_info();
+
+            let stats = if has_dwarf {
+                let (
+                    base_types,
+                    structs,
+                    unions,
+                    enums,
+                    arrays,
+                    pointers,
+                    typedefs,
+                    vars,
+                    members,
+                    values,
+                ) = parser.get_stats();
+                Some(DwarfStats {
+                    base_types,
+                    structs,
+                    unions,
+                    enums,
+                    arrays,
+                    pointers,
+                    typedefs,
+                    variables: vars,
+                    struct_members: members,
+                    enum_values: values,
+                })
+            } else {
+                None
+            };
+
+            let mut variables = if parser.global_variable_count() > 0 {
+                Self::extract_variables_from_dwarf(&parser)
+            } else {
+                Self::extract_variables_from_elf(&obj)
+            };
+
+            Self::enrich_variables_with_types(&mut variables, &parser);
+
+            let tc = parser.type_cache().clone();
+            let entries = Self::expand_all_entries(&variables, &tc);
+
+            (variables, has_dwarf, stats, Some(tc), Some(entries))
+        } else {
+            let variables = Self::extract_variables_from_elf(&obj);
+            (variables, false, None, None, None)
+        };
+
+        Ok(Self {
+            variables,
+            file_size,
+            has_dwarf,
+            dwarf_stats,
+            type_cache,
+            a2l_entries,
+        })
+    }
+
+    fn extract_variables_from_dwarf(parser: &DwarfParser) -> Vec<Variable> {
+        let type_cache = parser.type_cache();
+        let mut variables = Vec::new();
+        let mut seen = HashSet::new();
+
+        for dv in parser.global_variables() {
+            if seen.contains(&dv.name) {
+                continue;
+            }
+
+            let (size, type_name, type_info) = if dv.type_offset > 0 {
+                if let Some(ti) = type_cache.get(&dv.type_offset) {
+                    (ti.size, ti.name.clone(), Some(ti.clone()))
+                } else {
+                    (0, "unknown".to_string(), None)
+                }
+            } else {
+                (0, "unknown".to_string(), None)
+            };
+
+            if size == 0 {
+                continue;
+            }
+
+            variables.push(Variable {
+                name: dv.name.clone(),
+                address: dv.address,
+                size,
+                type_name,
+                section: String::new(),
+                type_info,
+            });
+
+            seen.insert(dv.name.clone());
+        }
+
+        variables.sort_by(|a, b| a.name.cmp(&b.name));
+        variables
+    }
+
+    fn extract_variables_from_elf(obj: &object::File) -> Vec<Variable> {
         let mut variables = Vec::new();
         let mut seen = HashSet::new();
 
@@ -114,58 +215,25 @@ impl ElfParser {
         }
 
         variables.sort_by(|a, b| a.name.cmp(&b.name));
+        variables
+    }
 
-        let (has_dwarf, dwarf_stats, type_cache, a2l_entries) = if deep {
-            let parser = DwarfParser::parse(&mmap).unwrap_or_else(|_| DwarfParser::new());
-            let has_dwarf = parser.has_dwarf_info();
+    fn enrich_variables_with_types(variables: &mut [Variable], parser: &DwarfParser) {
+        let type_cache = parser.type_cache();
+        let variable_types = parser.variable_types();
 
-            let stats = if has_dwarf {
-                let (
-                    base_types,
-                    structs,
-                    unions,
-                    enums,
-                    arrays,
-                    pointers,
-                    typedefs,
-                    vars,
-                    members,
-                    values,
-                ) = parser.get_stats();
-                Some(DwarfStats {
-                    base_types,
-                    structs,
-                    unions,
-                    enums,
-                    arrays,
-                    pointers,
-                    typedefs,
-                    variables: vars,
-                    struct_members: members,
-                    enum_values: values,
-                })
-            } else {
-                None
-            };
-
-            analyze_variables_with_dwarf(&mut variables, &mmap).ok();
-
-            let tc = parser.type_cache().clone();
-            let entries = Self::expand_all_entries(&variables, &tc);
-
-            (has_dwarf, stats, Some(tc), Some(entries))
-        } else {
-            (false, None, None, None)
-        };
-
-        Ok(Self {
-            variables,
-            file_size,
-            has_dwarf,
-            dwarf_stats,
-            type_cache,
-            a2l_entries,
-        })
+        for var in variables.iter_mut() {
+            if var.type_info.is_none() {
+                if let Some(&type_offset) = variable_types.get(&var.name) {
+                    if let Some(type_info) = type_cache.get(&type_offset) {
+                        var.type_info = Some(type_info.clone());
+                        if var.type_name.starts_with("uint") {
+                            var.type_name = type_info.name.clone();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn infer_type_name(size: usize) -> String {

@@ -6,6 +6,13 @@ use std::collections::HashMap;
 
 type DwarfReader = EndianSlice<'static, LittleEndian>;
 
+#[derive(Debug, Clone)]
+pub struct DwarfVariable {
+    pub name: String,
+    pub address: u64,
+    pub type_offset: u64,
+}
+
 #[derive(Debug)]
 struct CompositeBuilder {
     kind: TypeKind,
@@ -83,6 +90,7 @@ pub struct DwarfParser {
     type_cache: HashMap<u64, TypeInfo>,
     struct_map: HashMap<String, TypeInfo>,
     variable_types: HashMap<String, u64>,
+    global_variables: Vec<DwarfVariable>,
     array_elem_offsets: HashMap<u64, u64>,
     type_refs: HashMap<u64, u64>,
     stats: DwarfStats,
@@ -108,6 +116,7 @@ impl DwarfParser {
             type_cache: HashMap::new(),
             struct_map: HashMap::new(),
             variable_types: HashMap::new(),
+            global_variables: Vec::new(),
             array_elem_offsets: HashMap::new(),
             type_refs: HashMap::new(),
             stats: DwarfStats::default(),
@@ -349,7 +358,7 @@ impl DwarfParser {
                     self.parse_volatile_type_with_offset(entry, global_offset);
                 }
                 gimli::constants::DW_TAG_variable => {
-                    self.parse_variable(entry);
+                    self.parse_variable(entry, unit_offset);
                 }
                 gimli::constants::DW_TAG_member => {
                     self.stats.struct_members += 1;
@@ -624,19 +633,84 @@ impl DwarfParser {
         self.type_cache.insert(global_offset as u64, type_info);
     }
 
-    fn parse_variable(&mut self, entry: &gimli::DebuggingInformationEntry<DwarfReader>) {
+    fn parse_variable(
+        &mut self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+        unit_offset: usize,
+    ) {
         self.stats.variables += 1;
 
         if let Some(name) = Self::get_name_static(entry) {
-            let type_offset = Self::get_type_offset_static(entry);
+            let type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
+
+            if let Some(address) = Self::parse_location_static(entry) {
+                self.global_variables.push(DwarfVariable {
+                    name: name.clone(),
+                    address,
+                    type_offset,
+                });
+            }
+
             if type_offset > 0 {
                 self.variable_types.insert(name, type_offset);
             }
         }
     }
 
+    fn parse_location_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<u64> {
+        let attr = entry
+            .attr(gimli::constants::DW_AT_location)
+            .ok()
+            .flatten()?;
+
+        let value = attr.value();
+        match &value {
+            gimli::AttributeValue::Exprloc(expr) => Self::parse_dw_op_addr(expr.0.as_ref()),
+            gimli::AttributeValue::Block(block) => Self::parse_dw_op_addr(block.as_ref()),
+            _ => None,
+        }
+    }
+
+    fn parse_dw_op_addr(data: &[u8]) -> Option<u64> {
+        if data.is_empty() || data[0] != 0x03 {
+            return None;
+        }
+
+        match data.len() {
+            5 => Some(
+                data[1] as u64
+                    | ((data[2] as u64) << 8)
+                    | ((data[3] as u64) << 16)
+                    | ((data[4] as u64) << 24),
+            ),
+            9 => Some(
+                data[1] as u64
+                    | ((data[2] as u64) << 8)
+                    | ((data[3] as u64) << 16)
+                    | ((data[4] as u64) << 24)
+                    | ((data[5] as u64) << 32)
+                    | ((data[6] as u64) << 40)
+                    | ((data[7] as u64) << 48)
+                    | ((data[8] as u64) << 56),
+            ),
+            _ => None,
+        }
+    }
+
     pub fn get_variable_count(&self) -> usize {
         self.variable_types.len()
+    }
+
+    pub fn variable_types(&self) -> &HashMap<String, u64> {
+        &self.variable_types
+    }
+
+    pub fn global_variables(&self) -> &[DwarfVariable] {
+        &self.global_variables
+    }
+
+    pub fn global_variable_count(&self) -> usize {
+        self.global_variables.len()
     }
 
     pub fn get_type_cache_size(&self) -> usize {

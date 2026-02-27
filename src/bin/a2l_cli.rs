@@ -851,7 +851,11 @@ fn list_dwarf_variables(path: &PathBuf, limit: usize) -> Result<()> {
 
     let (total, resolved, unresolved_offsets) = parser.debug_type_resolution();
     println!("类型缓存大小: {}", parser.get_type_cache_size());
-    println!("变量总数: {}", total);
+    println!("DWARF 变量（variable_types）: {}", total);
+    println!(
+        "全局变量（global_variables）: {}",
+        parser.global_variable_count()
+    );
     println!("已解析类型: {}", resolved);
     println!("未解析偏移量数: {}", unresolved_offsets);
     println!();
