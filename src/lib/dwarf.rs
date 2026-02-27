@@ -1,10 +1,83 @@
-use crate::types::{StructMember, TypeEncoding, TypeInfo, TypeKind, Variable};
+use crate::types::{EnumVariant, StructMember, TypeEncoding, TypeInfo, TypeKind, Variable};
 use anyhow::{Context, Result};
 use gimli::{EndianSlice, LittleEndian};
 use object::{Object, ObjectSection};
 use std::collections::HashMap;
 
 type DwarfReader = EndianSlice<'static, LittleEndian>;
+
+#[derive(Debug)]
+struct CompositeBuilder {
+    kind: TypeKind,
+    global_offset: u64,
+    name: Option<String>,
+    size: usize,
+    encoding: TypeEncoding,
+    depth: isize,
+    members: Vec<StructMember>,
+    variants: Vec<EnumVariant>,
+    array_dims: Vec<usize>,
+    elem_type_offset: Option<u64>,
+}
+
+impl CompositeBuilder {
+    fn new(kind: TypeKind, global_offset: u64, depth: isize) -> Self {
+        Self {
+            kind,
+            global_offset,
+            name: None,
+            size: 0,
+            encoding: TypeEncoding::Unsigned,
+            depth,
+            members: Vec::new(),
+            variants: Vec::new(),
+            array_dims: Vec::new(),
+            elem_type_offset: None,
+        }
+    }
+
+    fn into_type_info(self) -> TypeInfo {
+        let type_name = self.name.clone().unwrap_or_else(|| {
+            format!(
+                "<anonymous_{}@0x{:x}>",
+                self.kind.to_string().to_lowercase(),
+                self.global_offset
+            )
+        });
+
+        match self.kind {
+            TypeKind::Struct => {
+                TypeInfo::struct_type(type_name, self.size, self.members, self.global_offset)
+            }
+            TypeKind::Union => {
+                TypeInfo::union_type(type_name, self.size, self.members, self.global_offset)
+            }
+            TypeKind::Enum => TypeInfo::enum_type(
+                type_name,
+                self.size,
+                self.encoding,
+                self.variants,
+                self.global_offset,
+            ),
+            TypeKind::Array => TypeInfo::array_type(
+                Self::format_array_name(&self.array_dims),
+                self.size,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                self.array_dims.clone(),
+                self.global_offset,
+            ),
+            _ => TypeInfo::primitive(type_name, self.size, self.encoding),
+        }
+    }
+
+    fn format_array_name(dims: &[usize]) -> String {
+        if dims.is_empty() {
+            return "array".to_string();
+        }
+        let dims_str: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
+        format!("array[{}]", dims_str.join("]["))
+    }
+}
 
 pub struct DwarfParser {
     type_cache: HashMap<u64, TypeInfo>,
@@ -195,26 +268,73 @@ impl DwarfParser {
             .map(|o| o.0)
             .unwrap_or(0);
 
+        let mut composite_stack: Vec<CompositeBuilder> = Vec::new();
         let mut cursor = header.entries(abbrevs);
+        let mut current_depth: isize = 0;
 
-        while let Some((_, entry)) = cursor.next_dfs().context("遍历 DIE 失败")? {
+        while let Some((delta, entry)) = cursor.next_dfs().context("遍历 DIE 失败")? {
+            current_depth += delta;
             let global_offset = unit_offset + entry.offset().0;
+
+            while let Some(top) = composite_stack.last() {
+                if current_depth <= top.depth {
+                    let completed = composite_stack.pop().unwrap();
+                    self.save_composite_type(completed, unit_offset);
+                } else {
+                    break;
+                }
+            }
 
             match entry.tag() {
                 gimli::constants::DW_TAG_base_type => {
                     self.parse_base_type_with_offset(entry, global_offset);
                 }
                 gimli::constants::DW_TAG_structure_type => {
-                    self.parse_struct_type_with_offset(header, abbrevs, entry, unit_offset);
+                    let builder = CompositeBuilder::new(
+                        TypeKind::Struct,
+                        global_offset as u64,
+                        current_depth,
+                    );
+                    composite_stack.push(builder);
+                    self.pre_parse_composite(
+                        entry,
+                        composite_stack.last_mut().unwrap(),
+                        unit_offset,
+                    );
                 }
                 gimli::constants::DW_TAG_union_type => {
-                    self.parse_union_type_with_offset(header, abbrevs, entry, unit_offset);
+                    let builder =
+                        CompositeBuilder::new(TypeKind::Union, global_offset as u64, current_depth);
+                    composite_stack.push(builder);
+                    self.pre_parse_composite(
+                        entry,
+                        composite_stack.last_mut().unwrap(),
+                        unit_offset,
+                    );
                 }
                 gimli::constants::DW_TAG_enumeration_type => {
-                    self.parse_enum_type_with_offset(header, abbrevs, entry, unit_offset);
+                    let builder =
+                        CompositeBuilder::new(TypeKind::Enum, global_offset as u64, current_depth);
+                    composite_stack.push(builder);
+                    self.pre_parse_composite(
+                        entry,
+                        composite_stack.last_mut().unwrap(),
+                        unit_offset,
+                    );
                 }
                 gimli::constants::DW_TAG_array_type => {
-                    self.parse_array_type_with_offset(header, abbrevs, entry, unit_offset);
+                    let builder =
+                        CompositeBuilder::new(TypeKind::Array, global_offset as u64, current_depth);
+                    let elem_type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
+                    composite_stack.push(builder);
+                    if let Some(top) = composite_stack.last_mut() {
+                        top.size = Self::get_size_static(entry);
+                        if elem_type_offset > 0 {
+                            top.elem_type_offset = Some(elem_type_offset);
+                            self.array_elem_offsets
+                                .insert(global_offset as u64, elem_type_offset);
+                        }
+                    }
                 }
                 gimli::constants::DW_TAG_pointer_type => {
                     self.parse_pointer_type_with_offset(entry, global_offset);
@@ -233,15 +353,126 @@ impl DwarfParser {
                 }
                 gimli::constants::DW_TAG_member => {
                     self.stats.struct_members += 1;
+                    if let Some(parent) = composite_stack.last_mut() {
+                        if parent.kind == TypeKind::Struct || parent.kind == TypeKind::Union {
+                            if let Some(member) = self.parse_member(entry, unit_offset) {
+                                parent.members.push(member);
+                            }
+                        }
+                    }
                 }
                 gimli::constants::DW_TAG_enumerator => {
                     self.stats.enum_values += 1;
+                    if let Some(parent) = composite_stack.last_mut() {
+                        if parent.kind == TypeKind::Enum {
+                            if let Some(name) = Self::get_name_static(entry) {
+                                if let Some(value) = Self::get_enum_value(entry) {
+                                    parent.variants.push(EnumVariant::new(name, value));
+                                }
+                            }
+                        }
+                    }
+                }
+                gimli::constants::DW_TAG_subrange_type => {
+                    if let Some(parent) = composite_stack.last_mut() {
+                        if parent.kind == TypeKind::Array {
+                            if let Some(dim) = Self::get_array_dimension(entry) {
+                                parent.array_dims.push(dim);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
         }
 
+        while let Some(completed) = composite_stack.pop() {
+            self.save_composite_type(completed, unit_offset);
+        }
+
         Ok(())
+    }
+
+    fn pre_parse_composite(
+        &mut self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+        builder: &mut CompositeBuilder,
+        unit_offset: usize,
+    ) {
+        builder.name = Self::get_name_static(entry);
+        builder.size = Self::get_size_static(entry);
+        if builder.kind == TypeKind::Enum {
+            builder.encoding = Self::get_encoding_static(entry);
+        }
+        if builder.kind == TypeKind::Array {
+            let elem_type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
+            if elem_type_offset > 0 {
+                builder.elem_type_offset = Some(elem_type_offset);
+            }
+        }
+    }
+
+    fn parse_member(
+        &mut self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+        unit_offset: usize,
+    ) -> Option<StructMember> {
+        let name = Self::get_name_static(entry)?;
+        let offset = Self::get_member_location_static(entry);
+        let size = Self::get_size_static(entry);
+        let (type_offset, is_unit_ref) = Self::get_type_offset_info_static(entry);
+        let global_type_offset = if type_offset > 0 {
+            if is_unit_ref {
+                unit_offset + type_offset as usize
+            } else {
+                type_offset as usize
+            }
+        } else {
+            0
+        };
+
+        let bitfield_info = Self::get_bitfield_info_static(entry);
+
+        let mut member = StructMember::new(name, offset, "unknown".to_string(), size)
+            .with_type_offset(global_type_offset as u64);
+
+        if let Some((bit_offset, bit_size)) = bitfield_info {
+            member = member.with_bitfield(bit_offset, bit_size);
+        }
+
+        Some(member)
+    }
+
+    fn save_composite_type(&mut self, builder: CompositeBuilder, _unit_offset: usize) {
+        match builder.kind {
+            TypeKind::Struct => {
+                self.stats.structs += 1;
+            }
+            TypeKind::Union => {
+                self.stats.unions += 1;
+            }
+            TypeKind::Enum => {
+                self.stats.enums += 1;
+            }
+            TypeKind::Array => {
+                self.stats.arrays += 1;
+            }
+            _ => {}
+        }
+
+        let original_name = builder.name.clone();
+        let type_info = builder.into_type_info();
+        let offset = type_info.offset;
+        let kind = type_info.kind;
+
+        self.type_cache.insert(offset, type_info);
+
+        if kind == TypeKind::Struct || kind == TypeKind::Union {
+            if let Some(named) = original_name {
+                self.struct_map
+                    .insert(named, self.type_cache.get(&offset).unwrap().clone());
+            }
+        }
     }
 
     fn parse_base_type_with_offset(
@@ -261,287 +492,6 @@ impl DwarfParser {
         }
     }
 
-    fn parse_struct_type_with_offset(
-        &mut self,
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) {
-        let local_offset = entry.offset().0;
-        let global_offset = unit_offset + local_offset;
-        let name = Self::get_name_static(entry);
-        let size = Self::get_size_static(entry);
-
-        let members =
-            Self::parse_struct_members_static_with_unit_offset(header, abbrevs, entry, unit_offset);
-
-        let type_name = name
-            .clone()
-            .unwrap_or_else(|| format!("<anonymous@0x{:x}>", global_offset));
-
-        let mut type_info =
-            TypeInfo::struct_type(type_name.clone(), size, members, global_offset as u64);
-        type_info.offset = global_offset as u64;
-
-        self.type_cache
-            .insert(global_offset as u64, type_info.clone());
-
-        if let Some(named) = name {
-            self.struct_map.insert(named, type_info);
-        }
-
-        self.stats.structs += 1;
-    }
-
-    fn parse_union_type_with_offset(
-        &mut self,
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) {
-        let local_offset = entry.offset().0;
-        let global_offset = unit_offset + local_offset;
-        let name = Self::get_name_static(entry);
-        let size = Self::get_size_static(entry);
-
-        let members =
-            Self::parse_union_members_static_with_unit_offset(header, abbrevs, entry, unit_offset);
-
-        let type_name = name
-            .clone()
-            .unwrap_or_else(|| format!("<anonymous_union@0x{:x}>", global_offset));
-
-        let mut type_info =
-            TypeInfo::union_type(type_name.clone(), size, members, global_offset as u64);
-        type_info.offset = global_offset as u64;
-
-        self.type_cache
-            .insert(global_offset as u64, type_info.clone());
-
-        if let Some(named) = name {
-            self.struct_map.insert(named, type_info);
-        }
-
-        self.stats.unions += 1;
-    }
-
-    fn parse_union_members_static_with_unit_offset(
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        parent_entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) -> Vec<StructMember> {
-        let mut members = Vec::new();
-        let parent_offset = parent_entry.offset();
-
-        let mut cursor = header.entries(abbrevs);
-        let mut found_parent = false;
-        let mut parent_depth: isize = 0;
-        let mut current_depth: isize = 0;
-
-        loop {
-            match cursor.next_dfs() {
-                Ok(Some((delta, entry))) => {
-                    current_depth += delta;
-
-                    if entry.offset() == parent_offset {
-                        found_parent = true;
-                        parent_depth = current_depth;
-                        continue;
-                    }
-
-                    if !found_parent {
-                        continue;
-                    }
-
-                    if current_depth <= parent_depth {
-                        break;
-                    }
-
-                    if entry.tag() == gimli::constants::DW_TAG_member {
-                        if let Some(name) = Self::get_name_static(entry) {
-                            let size = Self::get_size_static(entry);
-                            let (type_offset, is_unit_ref) =
-                                Self::get_type_offset_info_static(entry);
-                            let global_type_offset = if type_offset > 0 {
-                                if is_unit_ref {
-                                    unit_offset + type_offset as usize
-                                } else {
-                                    type_offset as usize
-                                }
-                            } else {
-                                0
-                            };
-
-                            let bitfield_info = Self::get_bitfield_info_static(entry);
-
-                            let mut member =
-                                StructMember::new(name, 0, "unknown".to_string(), size)
-                                    .with_type_offset(global_type_offset as u64);
-
-                            if let Some((bit_offset, bit_size)) = bitfield_info {
-                                member = member.with_bitfield(bit_offset, bit_size);
-                            }
-
-                            members.push(member);
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => continue,
-            }
-        }
-
-        members
-    }
-
-    fn parse_struct_members_static_with_unit_offset(
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        parent_entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) -> Vec<StructMember> {
-        let mut members = Vec::new();
-        let parent_offset = parent_entry.offset();
-
-        let mut cursor = header.entries(abbrevs);
-        let mut found_parent = false;
-        let mut parent_depth: isize = 0;
-        let mut current_depth: isize = 0;
-
-        loop {
-            match cursor.next_dfs() {
-                Ok(Some((delta, entry))) => {
-                    current_depth += delta;
-
-                    if entry.offset() == parent_offset {
-                        found_parent = true;
-                        parent_depth = current_depth;
-                        continue;
-                    }
-
-                    if !found_parent {
-                        continue;
-                    }
-
-                    if current_depth <= parent_depth {
-                        break;
-                    }
-
-                    if entry.tag() == gimli::constants::DW_TAG_member {
-                        if let Some(name) = Self::get_name_static(entry) {
-                            let offset = Self::get_member_location_static(entry);
-                            let size = Self::get_size_static(entry);
-                            let (type_offset, is_unit_ref) =
-                                Self::get_type_offset_info_static(entry);
-                            let global_type_offset = if type_offset > 0 {
-                                if is_unit_ref {
-                                    unit_offset + type_offset as usize
-                                } else {
-                                    type_offset as usize
-                                }
-                            } else {
-                                0
-                            };
-
-                            let bitfield_info = Self::get_bitfield_info_static(entry);
-
-                            let mut member =
-                                StructMember::new(name, offset, "unknown".to_string(), size)
-                                    .with_type_offset(global_type_offset as u64);
-
-                            if let Some((bit_offset, bit_size)) = bitfield_info {
-                                member = member.with_bitfield(bit_offset, bit_size);
-                            }
-
-                            members.push(member);
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => continue,
-            }
-        }
-
-        members
-    }
-
-    fn parse_enum_type_with_offset(
-        &mut self,
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) {
-        let local_offset = entry.offset().0;
-        let global_offset = unit_offset + local_offset;
-        let name = Self::get_name_static(entry);
-        let size = Self::get_size_static(entry);
-        let encoding = Self::get_encoding_static(entry);
-
-        let variants = Self::parse_enum_variants(header, abbrevs, entry);
-
-        if let Some(type_name) = name {
-            let mut type_info =
-                TypeInfo::enum_type(type_name, size, encoding, variants, global_offset as u64);
-            type_info.offset = global_offset as u64;
-            self.type_cache.insert(global_offset as u64, type_info);
-            self.stats.enums += 1;
-        }
-    }
-
-    fn parse_enum_variants(
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        parent_entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-    ) -> Vec<crate::types::EnumVariant> {
-        use crate::types::EnumVariant;
-
-        let mut variants = Vec::new();
-        let parent_offset = parent_entry.offset();
-
-        let mut cursor = header.entries(abbrevs);
-        let mut found_parent = false;
-        let mut parent_depth: isize = 0;
-        let mut current_depth: isize = 0;
-
-        loop {
-            match cursor.next_dfs() {
-                Ok(Some((delta, entry))) => {
-                    current_depth += delta;
-
-                    if entry.offset() == parent_offset {
-                        found_parent = true;
-                        parent_depth = current_depth;
-                        continue;
-                    }
-
-                    if !found_parent {
-                        continue;
-                    }
-
-                    if current_depth <= parent_depth {
-                        break;
-                    }
-
-                    if entry.tag() == gimli::constants::DW_TAG_enumerator {
-                        if let Some(name) = Self::get_name_static(entry) {
-                            if let Some(value) = Self::get_enum_value(entry) {
-                                variants.push(EnumVariant::new(name, value));
-                            }
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => continue,
-            }
-        }
-
-        variants
-    }
-
     fn get_enum_value(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<i64> {
         if let Some(attr) = entry
             .attr(gimli::constants::DW_AT_const_value)
@@ -559,83 +509,6 @@ impl DwarfParser {
             }
         }
         None
-    }
-
-    fn parse_array_type_with_offset(
-        &mut self,
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-        unit_offset: usize,
-    ) {
-        let local_offset = entry.offset().0;
-        let global_offset = unit_offset + local_offset;
-        let size = Self::get_size_static(entry);
-
-        let dims = Self::parse_array_dimensions(header, abbrevs, entry);
-        let elem_type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
-
-        if elem_type_offset > 0 {
-            self.array_elem_offsets
-                .insert(global_offset as u64, elem_type_offset);
-        }
-
-        let mut type_info = TypeInfo::array_type(
-            Self::format_array_name(&dims),
-            size,
-            TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
-            dims.clone(),
-            global_offset as u64,
-        );
-        type_info.offset = global_offset as u64;
-        self.type_cache.insert(global_offset as u64, type_info);
-        self.stats.arrays += 1;
-    }
-
-    fn parse_array_dimensions(
-        header: &gimli::UnitHeader<DwarfReader>,
-        abbrevs: &gimli::Abbreviations,
-        parent_entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-    ) -> Vec<usize> {
-        let mut dims = Vec::new();
-        let parent_offset = parent_entry.offset();
-
-        let mut cursor = header.entries(abbrevs);
-        let mut found_parent = false;
-        let mut parent_depth: isize = 0;
-        let mut current_depth: isize = 0;
-
-        loop {
-            match cursor.next_dfs() {
-                Ok(Some((delta, entry))) => {
-                    current_depth += delta;
-
-                    if entry.offset() == parent_offset {
-                        found_parent = true;
-                        parent_depth = current_depth;
-                        continue;
-                    }
-
-                    if !found_parent {
-                        continue;
-                    }
-
-                    if current_depth <= parent_depth {
-                        break;
-                    }
-
-                    if entry.tag() == gimli::constants::DW_TAG_subrange_type {
-                        if let Some(dim) = Self::get_array_dimension(entry) {
-                            dims.push(dim);
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => continue,
-            }
-        }
-
-        dims
     }
 
     fn get_array_dimension(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<usize> {
@@ -668,14 +541,6 @@ impl DwarfParser {
         }
 
         None
-    }
-
-    fn format_array_name(dims: &[usize]) -> String {
-        if dims.is_empty() {
-            return "array".to_string();
-        }
-        let dims_str: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
-        format!("array[{}]", dims_str.join("]["))
     }
 
     fn parse_pointer_type_with_offset(
