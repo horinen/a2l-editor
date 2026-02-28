@@ -68,6 +68,7 @@ pub struct EntryInfo {
     pub type_name: String,
     pub bit_offset: Option<usize>,
     pub bit_size: Option<usize>,
+    pub symbol_link: Option<String>,
 }
 
 impl From<(usize, &A2lEntry)> for EntryInfo {
@@ -81,6 +82,7 @@ impl From<(usize, &A2lEntry)> for EntryInfo {
             type_name: entry.type_name.clone(),
             bit_offset: entry.bit_offset,
             bit_size: entry.bit_size,
+            symbol_link: None,
         }
     }
 }
@@ -410,6 +412,7 @@ pub struct VariableEditInput {
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
+    pub symbol_link: Option<String>,
     pub entry: Option<EntryInfo>,
     pub export_mode: Option<String>,
 }
@@ -437,6 +440,7 @@ pub fn save_a2l_changes(
                 || e.f.is_some()
                 || e.offset.is_some()
                 || e.unit.is_some()
+                || e.symbol_link.is_some()
             {
                 Some(VariableChanges {
                     name: e.name,
@@ -448,6 +452,7 @@ pub fn save_a2l_changes(
                     f: e.f,
                     offset: e.offset,
                     unit: e.unit,
+                    symbol_link: e.symbol_link,
                 })
             } else {
                 None
@@ -460,6 +465,7 @@ pub fn save_a2l_changes(
                 type_name: info.type_name,
                 bit_offset: info.bit_offset,
                 bit_size: info.bit_size,
+                symbol_link: info.symbol_link,
             }),
             export_mode: e.export_mode,
         })
@@ -529,6 +535,7 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
                     f: None,
                     offset: None,
                     unit: None,
+                    symbol_link: None,
                 }),
                 entry: None,
                 export_mode: None,

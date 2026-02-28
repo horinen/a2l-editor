@@ -1,6 +1,6 @@
 # A2L Editor Tauri 版本 - 任务清单
 
-**状态**: ✅ v0.1.3 已完成 (转化系数编辑功能)
+**状态**: 📋 v0.1.4 规划中 (Excel 批量导入功能)
 **更新**: 2026-02-27
 
 ---
@@ -41,7 +41,8 @@
 | 13. DWARF 解析优化 | 11/13 | ✅ 完成 |
 | 14. 转化系数编辑功能 | 24/24 | ✅ 完成 |
 | 15. DWARF 全局变量提取 | 6/6 | ✅ 完成 |
-| **总进度**: 171/197 (87%)
+| 16. Excel 批量导入功能 | 20/20 | ✅ 完成 |
+| **总进度**: 191/217 (88%)
 
 **测试通过率**: 100% ✅
 
@@ -448,10 +449,42 @@
 
 ---
 
+## 阶段 16: Excel 批量导入功能
+
+### 16.1 后端支持 SYMBOL_LINK
+- [x] 16.1.1 `VariableChanges` 添加 `symbol_link: Option<String>` 字段 ✅
+- [x] 16.1.2 `A2lEntryInfo` 添加 `symbol_link` 字段 ✅
+- [x] 16.1.3 修改 `generate_measurement_block_with_compu` 支持 symbol_link 参数 ✅
+- [x] 16.1.4 修改 `generate_characteristic_block_with_compu` 支持 symbol_link 参数 ✅
+- [x] 16.1.5 修改 `apply_changes_to_block` 支持 SYMBOL_LINK 替换 ✅
+- [x] 16.1.6 `VariableEditInput` 添加 `symbol_link` 字段 ✅
+
+### 16.2 前端导入功能
+- [x] 16.2.1 安装 `xlsx` 依赖 ✅
+- [x] 16.2.2 创建 `ExcelImportRow` 类型定义 ✅
+- [x] 16.2.3 创建 `ImportExcelDialog.svelte` 组件 ✅
+- [x] 16.2.4 实现 Excel 文件选择和解析 ✅
+- [x] 16.2.5 实现从 ELF 匹配变量信息（用 link 列匹配）✅
+- [x] 16.2.6 实现批量覆盖逻辑（先删除再添加）✅
+- [x] 16.2.7 在 A2lPanel 添加导入/导出模板按钮 ✅
+- [x] 16.2.8 实现导出 Excel 模板功能 ✅
+
+### 16.3 测试验证
+- [x] 16.3.1 测试新建变量导入 ✅
+- [x] 16.3.2 测试覆盖已有变量 ✅
+- [x] 16.3.3 测试 SYMBOL_LINK 正确写入 ✅
+- [x] 16.3.4 测试变量类型识别（观测/标定）✅
+- [x] 16.3.5 测试导出模板功能 ✅
+- [x] 16.3.6 运行 `cargo test` 和 `npm run check` ✅
+
+---
+
 ## 变更日志
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-02-27 | **Excel 批量导入功能完成 (v0.1.4)**:<br>- 后端: VariableChanges/A2lEntryInfo/VariableEditInput 添加 symbol_link 字段<br>- 后端: generate_measurement/characteristic_block_with_compu 支持 symbol_link 参数<br>- 后端: apply_changes_to_block 支持 SYMBOL_LINK 替换<br>- 前端: 安装 xlsx 和 @tauri-apps/plugin-fs 依赖<br>- 前端: 创建 ImportExcelDialog.svelte 组件<br>- 前端: A2lPanel 添加导入(📥)/导出模板(📤)按钮<br>- 功能: 从 Excel 批量导入变量，用 link 列匹配 ELF 获取地址和类型<br>- 功能: 名称列作为 A2L 变量名，link 列作为 SYMBOL_LINK<br>- 功能: 支持导出 Excel 模板文件<br>- 功能: 重复变量名采用覆盖模式（先删后加） |
+| 2026-02-27 | **Excel 批量导入功能规划**:<br>- 用 link 列匹配 ELF 获取地址和数据类型<br>- 名称列作为 A2L 变量名，link 列作为 SYMBOL_LINK<br>- 变量类型使用中文（观测/标定）<br>- 支持导出 Excel 模板<br>- 重复变量名采用覆盖模式 |
 | 2026-02-27 | **转化系数编辑功能 (v0.1.3)**:<br>- A2lVariable/VariableChanges 添加 compu_method, f, offset, unit 字段<br>- 实现 parse_compu_methods() 解析 COMPU_METHOD 块<br>- 修改 parse_variable_block() 解析 COMPU_METHOD 引用和系数<br>- 实现 generate_compu_method_name() 生成共享名称 (如 CM_F0_5_O10)<br>- 实现 generate_compu_method_block() 生成 COMPU_METHOD 块<br>- 修改 generate_measurement/characteristic_block_with_compu() 支持 COMPU_METHOD<br>- 修改 apply_changes() 实现共享 COMPU_METHOD 逻辑<br>- 前端 A2lEditor 添加 F/OFFSET/Unit 输入框 |
 | 2026-02-27 | **DWARF 全局变量提取完成**:<br>- 新增 DwarfVariable 结构体存储全局变量<br>- 实现 parse_location_static() 解析 DW_OP_addr 提取地址<br>- 修改 parse_variable() 提取变量地址和类型信息<br>- 修改 elf.rs 优先使用 DWARF 全局变量<br>- static 全局变量及其成员现在可以正确搜索<br>- 变量数量从 ~8800 提升到 ~5500 (过滤 size=0 后) |
 | 2026-02-27 | **DWARF 全局变量提取问题分析**:<br>- 发现某些 static 全局变量在 DWARF 中存在，但不在 ELF 符号表<br>- 对比: ELF 符号表 8,857 变量 vs DWARF 17,157 变量<br>- 根因: static 全局变量或被优化的符号不会出现在 ELF 符号表<br>- 方案: 优先从 DWARF 提取全局变量，ELF 符号表作为无 DWARF 时的回退<br>- 影响文件: dwarf.rs, elf.rs |

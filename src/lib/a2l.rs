@@ -16,6 +16,7 @@ pub struct VariableChanges {
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
+    pub symbol_link: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +37,7 @@ pub struct A2lEntryInfo {
     pub type_name: String,
     pub bit_offset: Option<usize>,
     pub bit_size: Option<usize>,
+    pub symbol_link: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,12 +177,13 @@ impl A2lGenerator {
     }
 
     fn generate_measurement_block(entry: &A2lEntry) -> String {
-        Self::generate_measurement_block_with_compu(entry, None)
+        Self::generate_measurement_block_with_compu(entry, None, None)
     }
 
     fn generate_measurement_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
+        symbol_link: Option<&str>,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let format_str = Self::get_format_string(a2l_type);
@@ -194,6 +197,7 @@ impl A2lGenerator {
         };
 
         let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
+        let link = symbol_link.unwrap_or(&entry.full_name);
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -213,19 +217,20 @@ impl A2lGenerator {
         output.push_str(&format!("      ECU_ADDRESS 0x{:08X}\n", entry.address));
         output.push_str("      ECU_ADDRESS_EXTENSION 0x0\n");
         output.push_str(&format!("      FORMAT \"{}\"\n", format_str));
-        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", entry.full_name));
+        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
         output.push_str("    /end MEASUREMENT\n\n");
 
         output
     }
 
     fn generate_characteristic_block(entry: &A2lEntry) -> String {
-        Self::generate_characteristic_block_with_compu(entry, None)
+        Self::generate_characteristic_block_with_compu(entry, None, None)
     }
 
     fn generate_characteristic_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
+        symbol_link: Option<&str>,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let record_layout = Self::get_record_layout(a2l_type);
@@ -239,6 +244,7 @@ impl A2lGenerator {
         };
 
         let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
+        let link = symbol_link.unwrap_or(&entry.full_name);
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -256,7 +262,7 @@ impl A2lGenerator {
         }
 
         output.push_str(&format!("      EXTENDED_LIMITS 0 {}\n", max_val));
-        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", entry.full_name));
+        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
         output.push_str("    /end CHARACTERISTIC\n\n");
 
         output
@@ -647,11 +653,13 @@ impl A2lGenerator {
         let new_data_type = changes.data_type.as_deref().unwrap_or("");
         let new_bit_mask = changes.bit_mask.as_deref().unwrap_or("");
         let new_compu_method = changes.compu_method.as_deref().unwrap_or("");
+        let new_symbol_link = changes.symbol_link.as_deref().unwrap_or("");
 
         let mut original_name = String::new();
         let mut original_address = String::new();
         let mut original_data_type = String::new();
         let mut original_compu_method = String::new();
+        let mut original_symbol_link = String::new();
         let mut has_bit_mask = false;
         let mut bit_mask_indent = 0;
         let mut ecu_address_indent = 0;
@@ -697,6 +705,12 @@ impl A2lGenerator {
                 has_bit_mask = true;
                 bit_mask_indent = indent;
             }
+            if trimmed.starts_with("SYMBOL_LINK") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    original_symbol_link = parts[1].trim_matches('"').to_string();
+                }
+            }
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if !parts.is_empty() && a2l_types.contains(&parts[0]) {
                 original_data_type = parts[0].to_string();
@@ -732,6 +746,13 @@ impl A2lGenerator {
         } else {
             &original_compu_method
         };
+        let final_symbol_link = if !new_symbol_link.is_empty() {
+            new_symbol_link
+        } else if !original_symbol_link.is_empty() {
+            &original_symbol_link
+        } else {
+            &original_name
+        };
 
         let begin_re = Regex::new(r"^(\s*/begin\s+(?:MEASUREMENT|CHARACTERISTIC)\s+)\S+")?;
         let ecu_addr_re = Regex::new(r"^(\s*ECU_ADDRESS\s+)(0x[0-9a-fA-F]+)")?;
@@ -741,6 +762,7 @@ impl A2lGenerator {
             original_data_type
         ))?;
         let bit_mask_re = Regex::new(r"^(\s*BIT_MASK\s+)(0x[0-9a-fA-F]+)")?;
+        let symbol_link_re = Regex::new(r#"^(\s*SYMBOL_LINK\s+")([^"]+)("\s+\d+\s*)$"#)?;
 
         let mut result = String::new();
         let mut bit_mask_inserted = false;
@@ -816,6 +838,16 @@ impl A2lGenerator {
             if !new_bit_mask.is_empty() && has_bit_mask {
                 if let Some(caps) = bit_mask_re.captures(line) {
                     result.push_str(&format!("{}{}\n", &caps[1], new_bit_mask));
+                    continue;
+                }
+            }
+
+            if !new_symbol_link.is_empty() || !new_name.is_empty() {
+                if let Some(caps) = symbol_link_re.captures(line) {
+                    result.push_str(&format!(
+                        "{}{}{}{}\n",
+                        &caps[1], final_symbol_link, &caps[3], ""
+                    ));
                     continue;
                 }
             }
@@ -956,17 +988,24 @@ impl A2lGenerator {
                                 .changes
                                 .as_ref()
                                 .and_then(|c| c.compu_method.as_deref());
+                            let symbol_link = edit
+                                .changes
+                                .as_ref()
+                                .and_then(|c| c.symbol_link.as_deref())
+                                .or_else(|| entry_info.symbol_link.as_deref());
                             let block = match kind {
                                 ExportKind::Measurement => {
                                     Self::generate_measurement_block_with_compu(
                                         &entry,
                                         compu_method,
+                                        symbol_link,
                                     )
                                 }
                                 ExportKind::Characteristic => {
                                     Self::generate_characteristic_block_with_compu(
                                         &entry,
                                         compu_method,
+                                        symbol_link,
                                     )
                                 }
                             };

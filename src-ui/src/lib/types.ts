@@ -7,6 +7,7 @@ export interface A2lEntry {
   type_name: string;
   bit_offset: number | null;
   bit_size: number | null;
+  symbol_link?: string | null;
 }
 
 export interface A2lVariable {
@@ -62,6 +63,7 @@ export interface A2lVariableEdit {
   f?: number;
   offset?: number;
   unit?: string;
+  symbol_link?: string;
   entry?: A2lEntry;
   exportMode?: ExportMode;
 }
@@ -76,4 +78,17 @@ export interface SaveResult {
 export interface UpdateAddressResult {
   updated: number;
   skipped: number;
+}
+
+export interface ExcelImportRow {
+  名称: string;
+  link: string;
+  变量类型: '观测' | '标定';
+  转换关系?: string;
+}
+
+export interface ExcelImportResult {
+  imported: number;
+  skipped: number;
+  notFound: string[];
 }

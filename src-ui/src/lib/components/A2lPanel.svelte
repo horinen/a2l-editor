@@ -3,12 +3,16 @@
     a2lVariables, a2lSearchQuery, a2lSelectedNames, toggleA2lSelection,
     a2lSortConfigs, toggleSort, applySorting, parseAddress
   } from '$lib/stores';
-  import type { A2lVariable } from '$lib/types';
+  import type { A2lVariable, ExcelImportResult } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
   import { debounce } from '$lib/utils/debounce';
   import VirtualList from './VirtualList.svelte';
   import A2lEditor from './A2lEditor.svelte';
   import AddVariableDialog from './AddVariableDialog.svelte';
+  import ImportExcelDialog from './ImportExcelDialog.svelte';
+  import { save } from '@tauri-apps/plugin-dialog';
+  import { writeFile } from '@tauri-apps/plugin-fs';
+  import * as XLSX from 'xlsx';
 
   interface Props {
     oncontextmenu?: (e: CustomEvent<{ x: number; y: number; names: string[] }>) => void;
@@ -21,6 +25,7 @@
   let searchQuery = $state($a2lSearchQuery);
   let virtualListRef: VirtualList<A2lVariable>;
   let showAddDialog = $state(false);
+  let showImportDialog = $state(false);
   
   // 编辑器面板高度 (像素)
   let editorHeight = $state(120);
@@ -230,6 +235,37 @@
   function getVarTypeLabel(varType: string): string {
     return varType === 'CHARACTERISTIC' ? '标定' : '观测';
   }
+
+  async function exportTemplate() {
+    const selected = await save({
+      defaultPath: 'a2l-import-template.xlsx',
+      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+    });
+
+    if (!selected) return;
+
+    const wb = XLSX.utils.book_new();
+    const wsData = [
+      ['名称', 'link', '变量类型', '转换关系'],
+      ['VariableName', 'SymbolName', '观测', ''],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    
+    const varTypeCol = ws['C2'];
+    if (varTypeCol) {
+      varTypeCol.c = [{ t: { type: 'list', items: ['观测', '标定'] } }];
+    }
+    
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    const data = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    await writeFile(selected as string, data);
+  }
+
+  function handleImportResult(result: ExcelImportResult) {
+    if (result.notFound.length > 0) {
+      console.log('未找到的符号:', result.notFound);
+    }
+  }
 </script>
 
 <div class="panel" onkeydown={handleKeydown} tabindex="0">
@@ -249,6 +285,8 @@
     {#if searchQuery}
       <button class="clear-btn" onclick={clearSearch}>✖</button>
     {/if}
+    <button class="icon-btn import-btn" onclick={() => showImportDialog = true} title="从 Excel 导入">📥</button>
+    <button class="icon-btn template-btn" onclick={exportTemplate} title="导出 Excel 模板">📤</button>
     <button class="add-btn" onclick={() => showAddDialog = true} title="手动添加变量">➕</button>
   </div>
 
@@ -314,6 +352,7 @@
 </div>
 
 <AddVariableDialog visible={showAddDialog} onclose={() => showAddDialog = false} />
+<ImportExcelDialog visible={showImportDialog} onclose={() => showImportDialog = false} onresult={handleImportResult} />
 
 <style>
   .panel {
@@ -378,6 +417,23 @@
 
   .add-btn:hover {
     opacity: 0.85;
+  }
+
+  .icon-btn {
+    padding: 4px 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+
+  .icon-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
   }
 
   .table-header {

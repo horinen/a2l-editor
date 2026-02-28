@@ -26,6 +26,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-shell": "^2"
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-shell": "^2",
+    "xlsx": "^0.18.5"
   }
 }

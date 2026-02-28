@@ -72,6 +72,11 @@ export async function saveA2lChanges(edits: A2lVariableEdit[]): Promise<SaveResu
     data_type: e.data_type,
     var_type: e.var_type,
     bit_mask: e.bit_mask,
+    compu_method: e.compu_method,
+    f: e.f,
+    offset: e.offset,
+    unit: e.unit,
+    symbol_link: e.symbol_link,
     entry: e.entry,
     export_mode: e.exportMode,
   }));
