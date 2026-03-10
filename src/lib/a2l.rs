@@ -1,4 +1,4 @@
-use crate::types::{infer_a2l_type, A2lEntry, Variable};
+use crate::types::{infer_a2l_type, A2lEntry, Endianness, Variable};
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -146,7 +146,12 @@ impl A2lGenerator {
         }
 
         for entry in &self.entries {
-            output.push_str(&Self::generate_measurement_block(entry));
+            output.push_str(&Self::generate_measurement_block_with_compu(
+                entry,
+                None,
+                None,
+                Endianness::Little,
+            ));
         }
 
         output.push_str("  /end MODULE\n");
@@ -176,14 +181,11 @@ impl A2lGenerator {
         output
     }
 
-    fn generate_measurement_block(entry: &A2lEntry) -> String {
-        Self::generate_measurement_block_with_compu(entry, None, None)
-    }
-
     fn generate_measurement_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
         symbol_link: Option<&str>,
+        endianness: Endianness,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let format_str = Self::get_format_string(a2l_type);
@@ -210,7 +212,9 @@ impl A2lGenerator {
         ));
 
         if entry.is_bitfield() {
-            let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
+            let effective_offset = entry.get_effective_bit_offset(endianness).unwrap();
+            let bit_size = entry.bit_size.unwrap();
+            let mask = Self::calculate_bit_mask(effective_offset, bit_size);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
         }
 
@@ -223,14 +227,11 @@ impl A2lGenerator {
         output
     }
 
-    fn generate_characteristic_block(entry: &A2lEntry) -> String {
-        Self::generate_characteristic_block_with_compu(entry, None, None)
-    }
-
     fn generate_characteristic_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
         symbol_link: Option<&str>,
+        endianness: Endianness,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
         let record_layout = Self::get_record_layout(a2l_type);
@@ -257,7 +258,9 @@ impl A2lGenerator {
         ));
 
         if entry.is_bitfield() {
-            let mask = Self::calculate_bit_mask(entry.bit_offset, entry.bit_size);
+            let effective_offset = entry.get_effective_bit_offset(endianness).unwrap();
+            let bit_size = entry.bit_size.unwrap();
+            let mask = Self::calculate_bit_mask(effective_offset, bit_size);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
         }
 
@@ -346,12 +349,8 @@ impl A2lGenerator {
         }
     }
 
-    fn calculate_bit_mask(bit_offset: Option<usize>, bit_size: Option<usize>) -> u64 {
-        if let (Some(offset), Some(size)) = (bit_offset, bit_size) {
-            ((1u64 << size) - 1) << offset
-        } else {
-            0
-        }
+    fn calculate_bit_mask(effective_bit_offset: usize, bit_size: usize) -> u64 {
+        ((1u64 << bit_size) - 1) << effective_bit_offset
     }
 
     fn get_bitfield_max(bit_size: usize) -> u64 {
@@ -429,6 +428,7 @@ impl A2lGenerator {
         entries: &[A2lEntry],
         path: &std::path::Path,
         kind: ExportKind,
+        endianness: Endianness,
     ) -> Result<AppendResult> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("无法读取文件: {}", path.display()))?;
@@ -442,8 +442,12 @@ impl A2lGenerator {
         let new_blocks: String = to_add
             .iter()
             .map(|e| match kind {
-                ExportKind::Measurement => Self::generate_measurement_block(e),
-                ExportKind::Characteristic => Self::generate_characteristic_block(e),
+                ExportKind::Measurement => {
+                    Self::generate_measurement_block_with_compu(e, None, None, endianness)
+                }
+                ExportKind::Characteristic => {
+                    Self::generate_characteristic_block_with_compu(e, None, None, endianness)
+                }
             })
             .collect();
 
@@ -872,8 +876,11 @@ impl A2lGenerator {
         Ok(result)
     }
 
-    /// 统一应用所有变更（修改、删除、添加）
-    pub fn apply_changes(content: &str, edits: &[VariableEdit]) -> Result<(String, SaveResult)> {
+    pub fn apply_changes(
+        content: &str,
+        edits: &[VariableEdit],
+        endianness: Endianness,
+    ) -> Result<(String, SaveResult)> {
         use std::collections::HashMap;
 
         let mut result = content.to_string();
@@ -999,6 +1006,7 @@ impl A2lGenerator {
                                         &entry,
                                         compu_method,
                                         symbol_link,
+                                        endianness,
                                     )
                                 }
                                 ExportKind::Characteristic => {
@@ -1006,6 +1014,7 @@ impl A2lGenerator {
                                         &entry,
                                         compu_method,
                                         symbol_link,
+                                        endianness,
                                     )
                                 }
                             };

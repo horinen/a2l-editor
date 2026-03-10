@@ -367,6 +367,35 @@
 | 22 | A2L 变量编辑丢失原始格式 | ✅ 已修复 | 使用正则替换替代 format 重写，保留缩进/注释/空格 |
 | 23 | BIT_MASK 字段无法编辑 | ✅ 已新增 | 添加 BIT_MASK 编辑功能，支持修改和新增 |
 | 24 | ELF 变量搜索不到（static 全局变量） | ✅ 已修复 | static 全局变量在 DWARF 中存在但不在 ELF 符号表，已从 DWARF 提取 |
+| 25 | 位域变量 BIT_MASK 计算错误 | ✅ 已修复 | 小端模式下 BIT_MASK 值不正确，calculate_bit_mask 未考虑字节序 |
+
+---
+
+## 阶段 17: 位域 BIT_MASK 字节序修复
+
+### 17.1 问题分析
+- [x] 17.1.1 确认问题：位域变量导出后 BIT_MASK 值不正确 ✅
+- [x] 17.1.2 定位根因：`calculate_bit_mask` 直接使用 DWARF 原始 bit_offset，未考虑字节序 ✅
+- [x] 17.1.3 确认 BIT_MASK 计算时机：添加变量时动态计算，非生成数据包时 ✅
+
+### 17.2 问题根因
+- DWARF 的 `DW_AT_bit_offset` 在小端模式下表示从 **MSB**（最高有效位）开始的偏移
+- A2L 的 BIT_MASK 需要从 **LSB**（最低有效位）开始的实际位置
+- 当前代码直接使用原始 bit_offset 计算，未根据字节序转换
+
+### 17.3 修复方案
+- [x] 17.3.1 `types.rs`: 为 `A2lEntry` 添加 `get_effective_bit_offset()` 方法 ✅
+- [x] 17.3.2 `a2l.rs`: 修改 `calculate_bit_mask` 接受字节序参数 ✅
+- [x] 17.3.3 `a2l.rs`: 修改 `generate_measurement_block_with_compu` 使用转换后的 offset ✅
+- [x] 17.3.4 `a2l.rs`: 修改 `generate_characteristic_block_with_compu` 使用转换后的 offset ✅
+- [x] 17.3.5 `a2l.rs`: 修改 `append_to_file` 传递字节序参数 ✅
+- [x] 17.3.6 `commands.rs`: 修改 `export_entries` 传递 `state.endianness` ✅
+
+### 17.4 测试验证
+- [x] 17.4.1 测试小端模式位域变量 BIT_MASK 正确 ✅ (逻辑验证)
+- [x] 17.4.2 测试大端模式位域变量 BIT_MASK 正确 ✅ (逻辑验证)
+- [x] 17.4.3 运行 `cargo test` ✅
+- [x] 17.4.4 运行 `npm run check` ✅
 
 ---
 

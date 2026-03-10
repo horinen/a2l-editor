@@ -1,6 +1,6 @@
 use a2l_editor::{
     A2lEntry, A2lEntryInfo, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, DataPackage,
-    ElfParser, ExportKind, PackageMeta, SaveResult, VariableChanges, VariableEdit,
+    ElfParser, Endianness, ExportKind, PackageMeta, SaveResult, VariableChanges, VariableEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -350,7 +350,13 @@ pub fn export_entries(
         _ => return Err("无效的导出模式".to_string()),
     };
 
-    let result = A2lGenerator::append_to_file(&entries, &a2l_path, export_kind)
+    let endianness = if state.endianness == "big" {
+        Endianness::Big
+    } else {
+        Endianness::Little
+    };
+
+    let result = A2lGenerator::append_to_file(&entries, &a2l_path, export_kind, endianness)
         .map_err(|e| format!("导出失败: {}", e))?;
 
     // 重新加载 A2L
@@ -474,7 +480,13 @@ pub fn save_a2l_changes(
     let content =
         std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
 
-    let (new_content, result) = A2lGenerator::apply_changes(&content, &variable_edits)
+    let endianness = if state.endianness == "big" {
+        Endianness::Big
+    } else {
+        Endianness::Little
+    };
+
+    let (new_content, result) = A2lGenerator::apply_changes(&content, &variable_edits, endianness)
         .map_err(|e| format!("应用变更失败: {}", e))?;
 
     std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;

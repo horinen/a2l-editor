@@ -424,6 +424,19 @@ impl A2lEntry {
         self.bit_size.is_some()
     }
 
+    pub fn get_effective_bit_offset(&self, endianness: Endianness) -> Option<usize> {
+        let raw_offset = self.bit_offset?;
+        let bit_size = self.bit_size?;
+        let container_size_bits = self.size * 8;
+
+        let effective = match endianness {
+            Endianness::Little => container_size_bits - raw_offset - bit_size,
+            Endianness::Big => raw_offset,
+        };
+
+        Some(effective)
+    }
+
     pub fn with_array_index(mut self, index: Vec<usize>) -> Self {
         self.array_index = Some(index);
         self
