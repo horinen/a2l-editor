@@ -36,6 +36,9 @@ sha2 = "0.10"
 chrono = "0.4"
 dirs = "5.0"
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
+
 [profile.release]
 opt-level = 3
 lto = true

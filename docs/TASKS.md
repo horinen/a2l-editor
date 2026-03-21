@@ -368,6 +368,57 @@
 | 23 | BIT_MASK 字段无法编辑 | ✅ 已新增 | 添加 BIT_MASK 编辑功能，支持修改和新增 |
 | 24 | ELF 变量搜索不到（static 全局变量） | ✅ 已修复 | static 全局变量在 DWARF 中存在但不在 ELF 符号表，已从 DWARF 提取 |
 | 25 | 位域变量 BIT_MASK 计算错误 | ✅ 已修复 | 小端模式下 BIT_MASK 值不正确，calculate_bit_mask 未考虑字节序 |
+| 26 | 匿名结构体/联合体成员解析失败 | [!] 待修复 | DWARF 中匿名成员无 DW_AT_name 属性被跳过，导致 Cdd_TLE918X_SFR_RX 等类型解析失败 |
+
+---
+
+## 阶段 18: 匿名成员解析修复
+
+### 18.1 问题分析
+- [x] 18.1.1 确认问题：结构体数组 Cdd_TLE918X_SFR_RX 解析后成员为空 ✅
+- [x] 18.1.2 定位根因：`parse_member()` 要求成员必须有名称，匿名成员返回 None ✅
+- [x] 18.1.3 分析 DWARF 结构：结构体包含匿名 union 成员 ✅
+
+### 18.2 问题根因
+- DWARF 信息中某些结构体成员没有 `DW_AT_name` 属性（匿名成员）
+- 当前 `dwarf.rs:429` 使用 `let name = Self::get_name_static(entry)?;`
+- 当成员无名称时返回 `None`，整个成员被跳过
+- 示例: `Cdd_TLE918X_SFR_RX` 是一个数组，元素类型是包含匿名 union 的结构体
+
+### 18.3 修复方案
+- [ ] 18.3.1 修改 `parse_member()` 为匿名成员生成默认名称 `__anon_0`, `__anon_1` 等
+- [ ] 18.3.2 测试验证 Cdd_TLE918X_SFR_RX 结构体解析正确
+- [ ] 18.3.3 运行 `cargo test`
+- [ ] 18.3.4 运行 `npm run check`
+
+### 18.4 问题详情
+
+**DWARF 结构** (readelf 输出):
+```
+ <1><15dc9ecf>: DW_TAG_array_type        ← Cdd_TLE918X_SFR_RX 是数组
+     DW_AT_byte_size: 104
+     DW_AT_type: <0x15dc7e99>             ← 元素类型
+ <2><15dc9ed5>: DW_TAG_subrange_type
+     DW_AT_upper_bound: 0                 ← 数组大小 [1]
+
+ <1><15dc7e99>: DW_TAG_structure_type     ← 元素结构体
+     DW_AT_byte_size: 104
+ <2><15dc7e9f>: DW_TAG_member             ← 成员 (无 DW_AT_name!)
+     DW_AT_type: <0x15dc7e68>             ← 指向 union
+     DW_AT_byte_size: 104
+ <2><15dc7ea8>: (end)
+
+ <1><15dc7e68>: DW_TAG_union_type         ← 匿名 union
+     DW_AT_byte_size: 104
+ <2><15dc7e6e>: DW_TAG_member
+     DW_AT_name: REGISTER
+     ...
+ <2><15dc7e80>: DW_TAG_member
+     DW_AT_name: RegisterAgency
+     ...
+```
+
+**影响文件**: `src/lib/dwarf.rs`
 
 ---
 
