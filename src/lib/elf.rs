@@ -367,7 +367,11 @@ impl ElfParser {
         match type_info.kind {
             TypeKind::Struct | TypeKind::Union => {
                 for member in &type_info.members {
-                    let member_full_name = format!("{}.{}", prefix, member.name);
+                    let member_full_name = if member.name == "_" {
+                        prefix.to_string()
+                    } else {
+                        format!("{}.{}", prefix, member.name)
+                    };
                     let member_addr = base_addr + member.offset as u64;
 
                     if member.is_bitfield() {

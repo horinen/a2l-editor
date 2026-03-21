@@ -250,16 +250,38 @@ impl DwarfParser {
     }
 
     fn resolve_all_member_types(&mut self) {
-        for type_info in self.struct_map.values_mut() {
-            for member in &mut type_info.members {
-                if let Some(type_offset) = member.type_offset {
-                    if type_offset > 0 {
-                        if let Some(resolved) = self.type_cache.get(&type_offset) {
-                            member.type_name = resolved.name.clone();
-                            if member.type_size == 0 {
-                                member.type_size = resolved.size;
+        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = self
+            .type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+            .map(|(offset, type_info)| {
+                let member_updates: Vec<(usize, String, usize)> = type_info
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, member)| {
+                        member.type_offset.and_then(|type_offset| {
+                            if type_offset > 0 {
+                                self.type_cache
+                                    .get(&type_offset)
+                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
+                            } else {
+                                None
                             }
-                        }
+                        })
+                    })
+                    .collect();
+                (*offset, member_updates)
+            })
+            .collect();
+
+        for (offset, updates) in resolutions {
+            if let Some(type_info) = self.type_cache.get_mut(&offset) {
+                for (idx, type_name, type_size) in updates {
+                    let member = &mut type_info.members[idx];
+                    member.type_name = type_name;
+                    if member.type_size == 0 {
+                        member.type_size = type_size;
                     }
                 }
             }
@@ -426,7 +448,7 @@ impl DwarfParser {
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         unit_offset: usize,
     ) -> Option<StructMember> {
-        let name = Self::get_name_static(entry)?;
+        let name = Self::get_name_static(entry).unwrap_or_else(|| "_".to_string());
         let offset = Self::get_member_location_static(entry);
         let size = Self::get_size_static(entry);
         let (type_offset, is_unit_ref) = Self::get_type_offset_info_static(entry);
