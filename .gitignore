@@ -37,3 +37,6 @@ Thumbs.db
 # Tauri Driver Test - 只提交 lib/ 目录
 .tauri-driver-test/*
 !.tauri-driver-test/lib/
+
+# Temp
+temp/
