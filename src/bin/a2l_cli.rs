@@ -574,6 +574,16 @@ fn show_variable_type(path: &PathBuf, var_name: &str) -> Result<()> {
                 println!();
                 println!("数组维度: {:?}", info.array_dims);
             }
+
+            if let Some(ref elem_type) = info.pointer_target {
+                println!();
+                println!("数组元素类型: {} ({})", elem_type.name, elem_type.kind);
+                if elem_type.kind == a2l_editor::TypeKind::Struct
+                    || elem_type.kind == a2l_editor::TypeKind::Union
+                {
+                    println!("成员数量: {}", elem_type.members.len());
+                }
+            }
         }
     } else {
         println!("未找到变量: {}", var_name);

@@ -191,8 +191,8 @@ impl DwarfParser {
         }
 
         self.resolve_all_member_types();
-        self.resolve_type_refs();
         self.resolve_array_element_types();
+        self.resolve_type_refs();
 
         Ok(())
     }

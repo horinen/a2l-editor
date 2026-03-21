@@ -471,12 +471,7 @@ impl ElfParser {
         type_info: &TypeInfo,
         base_elem_size: usize,
     ) -> (Vec<usize>, Option<TypeInfo>, usize) {
-        let mut all_dims: Vec<usize> = type_info
-            .array_dims
-            .iter()
-            .filter(|&&d| d > 1)
-            .copied()
-            .collect();
+        let mut all_dims: Vec<usize> = type_info.array_dims.iter().copied().collect();
 
         let mut current_size = if type_info.size > 0 {
             let total: usize = type_info.array_dims.iter().product();
@@ -493,13 +488,7 @@ impl ElfParser {
 
         while let Some(ref inner) = elem_type {
             if inner.kind == TypeKind::Array {
-                let inner_dims: Vec<usize> = inner
-                    .array_dims
-                    .iter()
-                    .filter(|&&d| d > 1)
-                    .copied()
-                    .collect();
-                all_dims.extend(inner_dims);
+                all_dims.extend(inner.array_dims.iter().copied());
 
                 let inner_total: usize = inner.array_dims.iter().product();
                 if inner_total > 0 && inner.size > 0 {
