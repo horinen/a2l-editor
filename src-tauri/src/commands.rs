@@ -568,7 +568,12 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
     let content =
         std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
 
-    let (new_content, _) = A2lGenerator::apply_changes(&content, &edits)
+    let endianness = if state.endianness == "big" {
+        Endianness::Big
+    } else {
+        Endianness::Little
+    };
+    let (new_content, _) = A2lGenerator::apply_changes(&content, &edits, endianness)
         .map_err(|e| format!("更新地址失败: {}", e))?;
 
     std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
