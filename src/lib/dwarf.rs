@@ -199,20 +199,34 @@ impl DwarfParser {
 
     fn resolve_type_refs(&mut self) {
         let refs: Vec<(u64, u64)> = self.type_refs.iter().map(|(k, v)| (*k, *v)).collect();
+        let max_iterations = 100;
 
-        for (from_offset, to_offset) in refs {
-            if to_offset > 0 {
-                if let Some(target_type) = self.type_cache.get(&to_offset).cloned() {
-                    if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
-                        type_info.size = target_type.size;
-                        type_info.encoding = target_type.encoding;
-                        type_info.kind = target_type.kind;
-                        type_info.members = target_type.members.clone();
-                        type_info.variants = target_type.variants.clone();
-                        type_info.array_dims = target_type.array_dims.clone();
-                        type_info.pointer_target = target_type.pointer_target.clone();
+        for _ in 0..max_iterations {
+            let mut changed = false;
+
+            for &(from_offset, to_offset) in &refs {
+                if to_offset > 0 {
+                    if let Some(target_type) = self.type_cache.get(&to_offset).cloned() {
+                        if target_type.size > 0 {
+                            if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
+                                if type_info.size == 0 {
+                                    type_info.size = target_type.size;
+                                    type_info.encoding = target_type.encoding;
+                                    type_info.kind = target_type.kind;
+                                    type_info.members = target_type.members.clone();
+                                    type_info.variants = target_type.variants.clone();
+                                    type_info.array_dims = target_type.array_dims.clone();
+                                    type_info.pointer_target = target_type.pointer_target.clone();
+                                    changed = true;
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            if !changed {
+                break;
             }
         }
     }
@@ -371,13 +385,13 @@ impl DwarfParser {
                     self.parse_pointer_type_with_offset(entry, global_offset);
                 }
                 gimli::constants::DW_TAG_typedef => {
-                    self.parse_typedef_with_offset(entry, global_offset);
+                    self.parse_typedef_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_const_type => {
-                    self.parse_const_type_with_offset(entry, global_offset);
+                    self.parse_const_type_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_volatile_type => {
-                    self.parse_volatile_type_with_offset(entry, global_offset);
+                    self.parse_volatile_type_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_variable => {
                     self.parse_variable(entry, unit_offset);
@@ -596,9 +610,10 @@ impl DwarfParser {
         &mut self,
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         global_offset: usize,
+        unit_offset: usize,
     ) {
         let name = Self::get_name_static(entry);
-        let target_offset = Self::get_type_offset_static(entry);
+        let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         if let Some(type_name) = name {
             let mut type_info = TypeInfo::primitive(type_name.clone(), 0, TypeEncoding::Unsigned);
@@ -619,9 +634,10 @@ impl DwarfParser {
         &mut self,
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         global_offset: usize,
+        unit_offset: usize,
     ) {
         let name = Self::get_name_static(entry);
-        let target_offset = Self::get_type_offset_static(entry);
+        let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         let type_name = name.unwrap_or_else(|| "const".to_string());
         let mut type_info = TypeInfo::primitive(type_name, 0, TypeEncoding::Unsigned);
@@ -639,9 +655,10 @@ impl DwarfParser {
         &mut self,
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         global_offset: usize,
+        unit_offset: usize,
     ) {
         let name = Self::get_name_static(entry);
-        let target_offset = Self::get_type_offset_static(entry);
+        let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         let type_name = name.unwrap_or_else(|| "volatile".to_string());
         let mut type_info = TypeInfo::primitive(type_name, 0, TypeEncoding::Unsigned);
@@ -824,19 +841,6 @@ impl DwarfParser {
             .unwrap_or(0)
     }
 
-    fn get_type_offset_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> u64 {
-        entry
-            .attr(gimli::constants::DW_AT_type)
-            .ok()
-            .flatten()
-            .and_then(|attr| match attr.value() {
-                gimli::AttributeValue::UnitRef(r) => Some(r.0 as u64),
-                gimli::AttributeValue::DebugInfoRef(r) => Some(r.0 as u64),
-                _ => None,
-            })
-            .unwrap_or(0)
-    }
-
     fn get_type_offset_with_unit(
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         unit_offset: usize,
@@ -934,20 +938,17 @@ impl DwarfParser {
         println!("检查偏移 0x{:x}:", offset);
         if let Some(t) = self.type_cache.get(&offset) {
             println!("  找到: {} ({})", t.name, t.kind);
+            println!("  size: {}, encoding: {:?}", t.size, t.encoding);
+            if !t.array_dims.is_empty() {
+                println!("  array_dims: {:?}", t.array_dims);
+            }
         } else {
             println!("  未找到");
-            let target = offset as i64;
-            let mut found = false;
-            for k in self.type_cache.keys() {
-                if (*k as i64 - target).abs() < 100 {
-                    found = true;
-                    if let Some(t) = self.type_cache.get(k) {
-                        println!("  相近: 0x{:x}: {} ({})", k, t.name, t.kind);
-                    }
-                }
-            }
-            if !found {
-                println!("  没有相近的偏移");
+        }
+        if let Some(target) = self.type_refs.get(&offset) {
+            println!("  type_refs -> 0x{:x}", target);
+            if let Some(t) = self.type_cache.get(target) {
+                println!("    目标: {} ({}, size={})", t.name, t.kind, t.size);
             }
         }
     }
