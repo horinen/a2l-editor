@@ -1,7 +1,7 @@
 use crate::dwarf::DwarfParser;
 use crate::types::{
-    infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, TypeInfo, TypeKind, Variable,
-    MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
+    infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, StructMember, TypeInfo, TypeKind,
+    Variable, MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
 };
 use anyhow::{Context, Result};
 use memmap2::Mmap;
@@ -366,43 +366,52 @@ impl ElfParser {
 
         match type_info.kind {
             TypeKind::Struct | TypeKind::Union => {
+                let bitfield_groups = Self::compute_bitfield_groups(&type_info.members);
+
                 for member in &type_info.members {
                     let member_full_name = if member.name == "_" {
                         prefix.to_string()
                     } else {
                         format!("{}.{}", prefix, member.name)
                     };
-                    let member_addr = base_addr + member.offset as u64;
 
                     if member.is_bitfield() {
-                        let member_a2l_type =
-                            infer_a2l_type_from_encoding(member.type_size, type_info.encoding);
-                        store.add(
-                            A2lEntry::new(
-                                member_full_name,
-                                member_addr,
-                                member.type_size,
-                                member_a2l_type.to_string(),
-                                member.type_name.clone(),
-                            )
-                            .with_bitfield(
-                                member.bit_offset.unwrap_or(0),
-                                member.bit_size.unwrap_or(0),
-                            ),
-                        );
-                    } else if let Some(type_offset) = member.type_offset {
-                        if type_offset > 0 {
-                            if let Some(member_type) = type_cache.get(&type_offset) {
-                                Self::expand_recursive(
-                                    &member_full_name,
-                                    member_addr,
-                                    member_type,
-                                    depth + 1,
-                                    visited,
-                                    type_cache,
-                                    store,
-                                    None,
-                                );
+                        if let Some(&(container_offset, container_size)) =
+                            bitfield_groups.get(&member.offset)
+                        {
+                            let container_addr = base_addr + container_offset as u64;
+                            let container_a2l_type =
+                                infer_a2l_type_from_encoding(container_size, type_info.encoding);
+                            store.add(
+                                A2lEntry::new(
+                                    member_full_name,
+                                    container_addr,
+                                    container_size,
+                                    container_a2l_type.to_string(),
+                                    member.type_name.clone(),
+                                )
+                                .with_bitfield(
+                                    member.bit_offset.unwrap_or(0),
+                                    member.bit_size.unwrap_or(0),
+                                ),
+                            );
+                        }
+                    } else {
+                        let member_addr = base_addr + member.offset as u64;
+                        if let Some(type_offset) = member.type_offset {
+                            if type_offset > 0 {
+                                if let Some(member_type) = type_cache.get(&type_offset) {
+                                    Self::expand_recursive(
+                                        &member_full_name,
+                                        member_addr,
+                                        member_type,
+                                        depth + 1,
+                                        visited,
+                                        type_cache,
+                                        store,
+                                        None,
+                                    );
+                                }
                             }
                         }
                     }
@@ -461,6 +470,34 @@ impl ElfParser {
         }
 
         visited.remove(&type_info.offset);
+    }
+
+    fn compute_bitfield_groups(members: &[StructMember]) -> HashMap<usize, (usize, usize)> {
+        let mut groups: HashMap<usize, (usize, usize)> = HashMap::new();
+        let mut i = 0;
+        while i < members.len() {
+            if members[i].is_bitfield() {
+                let start = i;
+                i += 1;
+                while i < members.len() && members[i].is_bitfield() {
+                    i += 1;
+                }
+                let group = &members[start..i];
+                let min_offset = group.iter().map(|m| m.offset).min().unwrap_or(0);
+                let max_end = group
+                    .iter()
+                    .map(|m| m.offset + m.type_size)
+                    .max()
+                    .unwrap_or(0);
+                let container_size = max_end.saturating_sub(min_offset);
+                for member in group {
+                    groups.insert(member.offset, (min_offset, container_size));
+                }
+            } else {
+                i += 1;
+            }
+        }
+        groups
     }
 
     fn format_array_element_name(prefix: &str, indices: &[usize]) -> String {
