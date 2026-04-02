@@ -259,17 +259,10 @@ impl StructMember {
 
     pub fn get_effective_bit_offset(
         &self,
-        endianness: Endianness,
-        container_size_bits: usize,
+        _endianness: Endianness,
+        _container_size_bits: usize,
     ) -> Option<usize> {
-        let raw_offset = self.bit_offset?;
-
-        let effective = match endianness {
-            Endianness::Little => container_size_bits - raw_offset - self.bit_size.unwrap_or(0),
-            Endianness::Big => raw_offset,
-        };
-
-        Some(effective)
+        Some(self.bit_offset?)
     }
 }
 
@@ -424,17 +417,8 @@ impl A2lEntry {
         self.bit_size.is_some()
     }
 
-    pub fn get_effective_bit_offset(&self, endianness: Endianness) -> Option<usize> {
-        let raw_offset = self.bit_offset?;
-        let bit_size = self.bit_size?;
-        let container_size_bits = self.size * 8;
-
-        let effective = match endianness {
-            Endianness::Little => container_size_bits - raw_offset - bit_size,
-            Endianness::Big => raw_offset,
-        };
-
-        Some(effective)
+    pub fn get_effective_bit_offset(&self, _endianness: Endianness) -> Option<usize> {
+        Some(self.bit_offset?)
     }
 
     pub fn with_array_index(mut self, index: Vec<usize>) -> Self {

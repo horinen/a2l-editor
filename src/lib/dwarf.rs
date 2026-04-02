@@ -805,6 +805,19 @@ impl DwarfParser {
             .unwrap_or(TypeEncoding::Unsigned)
     }
 
+    fn read_uleb128(data: &[u8]) -> usize {
+        let mut result: usize = 0;
+        let mut shift: usize = 0;
+        for &byte in data {
+            result |= ((byte & 0x7f) as usize) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        result
+    }
+
     fn get_member_location_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> usize {
         entry
             .attr(gimli::constants::DW_AT_data_member_location)
@@ -819,9 +832,7 @@ impl DwarfParser {
                 gimli::AttributeValue::Sdata(v) => Some(v as usize),
                 gimli::AttributeValue::Block(block) => {
                     if block.len() >= 2 && block[0] == 0x23 {
-                        Some(block[1] as usize)
-                    } else if block.len() >= 3 && block[0] == 0x23 {
-                        Some(block[1] as usize | ((block[2] as usize) << 8))
+                        Some(Self::read_uleb128(&block[1..]))
                     } else {
                         None
                     }
@@ -829,9 +840,7 @@ impl DwarfParser {
                 gimli::AttributeValue::Exprloc(expr) => {
                     let data = &expr.0;
                     if data.len() >= 2 && data[0] == 0x23 {
-                        Some(data[1] as usize)
-                    } else if data.len() >= 3 && data[0] == 0x23 {
-                        Some(data[1] as usize | ((data[2] as usize) << 8))
+                        Some(Self::read_uleb128(&data[1..]))
                     } else {
                         None
                     }

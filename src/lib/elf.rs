@@ -382,6 +382,12 @@ impl ElfParser {
                             let container_addr = base_addr + container_offset as u64;
                             let container_a2l_type =
                                 infer_a2l_type_from_encoding(container_size, type_info.encoding);
+                            let byte_in_container = member.offset.saturating_sub(container_offset);
+                            let storage_bits = member.type_size * 8;
+                            let raw_bo = member.bit_offset.unwrap_or(0);
+                            let raw_bs = member.bit_size.unwrap_or(0);
+                            let actual_bit_offset = byte_in_container * 8
+                                + storage_bits.saturating_sub(raw_bo + raw_bs);
                             store.add(
                                 A2lEntry::new(
                                     member_full_name,
@@ -390,10 +396,7 @@ impl ElfParser {
                                     container_a2l_type.to_string(),
                                     member.type_name.clone(),
                                 )
-                                .with_bitfield(
-                                    member.bit_offset.unwrap_or(0),
-                                    member.bit_size.unwrap_or(0),
-                                ),
+                                .with_bitfield(actual_bit_offset, raw_bs),
                             );
                         }
                     } else {
