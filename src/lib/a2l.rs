@@ -199,7 +199,6 @@ impl A2lGenerator {
         };
 
         let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
-        let link = symbol_link.unwrap_or(&entry.full_name);
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -221,7 +220,17 @@ impl A2lGenerator {
         output.push_str(&format!("      ECU_ADDRESS 0x{:08X}\n", entry.address));
         output.push_str("      ECU_ADDRESS_EXTENSION 0x0\n");
         output.push_str(&format!("      FORMAT \"{}\"\n", format_str));
-        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+        if entry.is_bitfield() && entry.symbol_link_name.is_some() {
+            let sym_name = entry.symbol_link_name.as_ref().unwrap();
+            let sym_offset = entry.symbol_link_offset.unwrap_or(0);
+            output.push_str(&format!(
+                "      SYMBOL_LINK \"{}\" {}\n",
+                sym_name, sym_offset
+            ));
+        } else {
+            let link = symbol_link.unwrap_or(&entry.full_name);
+            output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+        }
         output.push_str("    /end MEASUREMENT\n\n");
 
         output
@@ -265,7 +274,16 @@ impl A2lGenerator {
         }
 
         output.push_str(&format!("      EXTENDED_LIMITS 0 {}\n", max_val));
-        output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+        if entry.is_bitfield() && entry.symbol_link_name.is_some() {
+            let sym_name = entry.symbol_link_name.as_ref().unwrap();
+            let sym_offset = entry.symbol_link_offset.unwrap_or(0);
+            output.push_str(&format!(
+                "      SYMBOL_LINK \"{}\" {}\n",
+                sym_name, sym_offset
+            ));
+        } else {
+            output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+        }
         output.push_str("    /end CHARACTERISTIC\n\n");
 
         output
@@ -986,6 +1004,12 @@ impl A2lGenerator {
                                 bit_offset: entry_info.bit_offset,
                                 bit_size: entry_info.bit_size,
                                 array_index: None,
+                                symbol_link_name: entry_info.symbol_link.clone(),
+                                symbol_link_offset: entry_info.symbol_link.as_ref().and_then(|s| {
+                                    s.split_whitespace()
+                                        .last()
+                                        .and_then(|n| n.parse::<u64>().ok())
+                                }),
                             };
                             let kind = match edit.export_mode.as_deref() {
                                 Some("characteristic") => ExportKind::Characteristic,

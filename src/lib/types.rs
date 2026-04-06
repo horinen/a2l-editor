@@ -385,6 +385,8 @@ pub struct A2lEntry {
     pub bit_offset: Option<usize>,
     pub bit_size: Option<usize>,
     pub array_index: Option<Vec<usize>>,
+    pub symbol_link_name: Option<String>,
+    pub symbol_link_offset: Option<u64>,
 }
 
 impl A2lEntry {
@@ -404,6 +406,8 @@ impl A2lEntry {
             bit_offset: None,
             bit_size: None,
             array_index: None,
+            symbol_link_name: None,
+            symbol_link_offset: None,
         }
     }
 
@@ -423,6 +427,12 @@ impl A2lEntry {
 
     pub fn with_array_index(mut self, index: Vec<usize>) -> Self {
         self.array_index = Some(index);
+        self
+    }
+
+    pub fn with_symbol_link(mut self, name: String, offset: u64) -> Self {
+        self.symbol_link_name = Some(name);
+        self.symbol_link_offset = Some(offset);
         self
     }
 }

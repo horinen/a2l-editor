@@ -320,6 +320,8 @@ impl ElfParser {
                 type_cache,
                 store,
                 None,
+                Some(&var.name),
+                Some(var.address),
             );
         } else {
             let a2l_type = infer_a2l_type_from_encoding(var.size, Default::default());
@@ -342,6 +344,8 @@ impl ElfParser {
         type_cache: &HashMap<u64, TypeInfo>,
         store: &mut A2lEntryStore,
         array_index: Option<Vec<usize>>,
+        root_symbol: Option<&str>,
+        root_addr: Option<u64>,
     ) {
         if depth > MAX_NESTING_DEPTH {
             return;
@@ -388,16 +392,21 @@ impl ElfParser {
                             let raw_bs = member.bit_size.unwrap_or(0);
                             let actual_bit_offset = byte_in_container * 8
                                 + storage_bits.saturating_sub(raw_bo + raw_bs);
-                            store.add(
-                                A2lEntry::new(
-                                    member_full_name,
-                                    container_addr,
-                                    container_size,
-                                    container_a2l_type.to_string(),
-                                    member.type_name.clone(),
-                                )
-                                .with_bitfield(actual_bit_offset, raw_bs),
-                            );
+                            let mut entry = A2lEntry::new(
+                                member_full_name,
+                                container_addr,
+                                container_size,
+                                container_a2l_type.to_string(),
+                                member.type_name.clone(),
+                            )
+                            .with_bitfield(actual_bit_offset, raw_bs);
+                            if let (Some(sym), Some(raddr)) = (root_symbol, root_addr) {
+                                entry = entry.with_symbol_link(
+                                    sym.to_string(),
+                                    container_addr.saturating_sub(raddr),
+                                );
+                            }
+                            store.add(entry);
                         }
                     } else {
                         let member_addr = base_addr + member.offset as u64;
@@ -413,6 +422,8 @@ impl ElfParser {
                                         type_cache,
                                         store,
                                         None,
+                                        root_symbol,
+                                        root_addr,
                                     );
                                 }
                             }
@@ -441,6 +452,8 @@ impl ElfParser {
                             type_cache,
                             store,
                             &base_idx,
+                            root_symbol,
+                            root_addr,
                         );
                     } else if total_elements > 0 {
                         for i in 0..total_elements {
@@ -570,6 +583,8 @@ impl ElfParser {
         type_cache: &HashMap<u64, TypeInfo>,
         store: &mut A2lEntryStore,
         base_idx: &[usize],
+        root_symbol: Option<&str>,
+        root_addr: Option<u64>,
     ) {
         if dims.is_empty() {
             let fixed_elem_type = if elem_type.size == 0 {
@@ -588,6 +603,8 @@ impl ElfParser {
                 type_cache,
                 store,
                 Some(base_idx.to_vec()),
+                root_symbol,
+                root_addr,
             );
             return;
         }
@@ -612,6 +629,8 @@ impl ElfParser {
                 type_cache,
                 store,
                 &full_idx,
+                root_symbol,
+                root_addr,
             );
         }
     }

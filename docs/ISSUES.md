@@ -215,6 +215,143 @@ Block(block) | Exprloc(expr) => {
 
 ---
 
+## [OPEN] bitfield 变量 SYMBOL_LINK 指向点分路径，CANape 更新地址后覆盖为错误值
+
+**发现日期**: 2026-04-03
+**严重程度**: 高
+
+### 问题描述
+
+A2L 文件中的 bitfield 变量（使用 BIT_MASK 的 MEASUREMENT）导入 CANape 后，CANape 的符号更新机制会将 `ECU_ADDRESS` 覆盖为错误的地址。
+
+**复现变量**: `Cdd_L9388_SFR_RX.EXCEPTIONS_CH0_5._0_.B.OPEN_LOAD`
+
+结构体定义（小端模式）：
+```c
+union {
+    uint32 R;
+    struct {
+        uint32 Crc          :5;   // byte 0, bits[0..4]
+        uint32 LS_CLAMP_ON  :1;   // byte 0, bit 5
+        uint32 ...
+        uint32 OPEN_LOAD    :1;   // byte 1, bit 11
+        uint32 ...
+    } B;
+} EXCEPTIONS_CH0_5[6];
+```
+
+**当前 A2L 输出**:
+```
+/begin MEASUREMENT Cdd_L9388_SFR_RX.EXCEPTIONS_CH0_5._0_.B.OPEN_LOAD ""
+  ULONG NO_COMPU_METHOD 0 0 0 1
+  BIT_MASK 0x800
+  ECU_ADDRESS 0x70027AAC                    ← 正确的容器地址
+  SYMBOL_LINK "Cdd_L9388_SFR_RX.EXCEPTIONS_CH0_5._0_.B.OPEN_LOAD" 0
+/end MEASUREMENT
+```
+
+**CANape 更新后的错误地址**:
+```
+ECU_ADDRESS 0x70027AAD                      ← 错误！CANape 按 SYMBOL_LINK 路径计算出 byte_offset=1
+```
+
+OPEN_LOAD 的 DWARF `data_member_location` 是 1（在 byte 1），CANape 沿点分路径解析结构体时得到字节偏移 1，将容器地址 `0x70027AAC` 覆盖为 `0x70027AAC + 1 = 0x70027AAD`。但 bitfield 的 ECU_ADDRESS 必须指向容器起始地址（byte 0），BIT_MASK 才能正确工作。
+
+### 根本原因
+
+A2L 规范中 `SYMBOL_LINK` 的格式为：
+```
+SYMBOL_LINK "<符号名>" <字节偏移>
+```
+
+当前代码（`src/lib/a2l.rs:202,224`）对所有变量统一使用点分路径名 + 偏移 0：
+```rust
+let link = symbol_link.unwrap_or(&entry.full_name);
+output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+```
+
+对于 bitfield 变量，`entry.full_name` 是类似 `"Cdd_L9388_SFR_RX.EXCEPTIONS_CH0_5._0_.B.OPEN_LOAD"` 的点分路径。CANape 解析此路径时会沿结构体层级逐级计算字节偏移，最终得到 bitfield 成员在容器内的字节偏移（如 byte 1），而非容器本身的起始偏移（byte 0）。
+
+正确做法是让 SYMBOL_LINK 指向 ELF 中的真实符号（顶层变量名），并通过偏移量指向容器位置：
+```
+SYMBOL_LINK "Cdd_L9388_SFR_RX" <容器在结构体中的字节偏移>
+```
+
+CANape 的更新机制会计算：`ELF 符号地址 + SYMBOL_LINK 偏移 = 容器地址`，与 BIT_MASK 配合正确解析 bitfield。
+
+### 修复方案
+
+#### 修改 1: `src/lib/types.rs` — A2lEntry 添加 SYMBOL_LINK 元信息
+
+```rust
+pub struct A2lEntry {
+    // ... 现有字段 ...
+    pub symbol_link_name: Option<String>,   // ELF 根符号名（如 "Cdd_L9388_SFR_RX"）
+    pub symbol_link_offset: Option<u64>,    // 容器在根符号中的字节偏移
+}
+```
+
+仅 bitfield 变量需要设置这两个字段，非 bitfield 变量保持 `None`，仍使用 `full_name` + `0`。
+
+#### 修改 2: `src/lib/elf.rs` — expand_recursive 传递根符号信息
+
+`expand_recursive` 签名新增参数 `root_symbol: Option<&str>` 和 `root_addr: Option<u64>`：
+
+- `expand_variable`（入口）：传入 `Some(&var.name)`, `Some(var.address)`
+- bitfield 条目创建处：计算 `symbol_link_offset = container_addr - root_addr`
+  ```rust
+  store.add(
+      A2lEntry::new(...)
+          .with_bitfield(actual_bit_offset, raw_bs)
+          .with_symbol_link(root_symbol.unwrap().to_string(), container_addr - root_addr.unwrap()),
+  );
+  ```
+- 递归调用（`expand_recursive`, `expand_multi_dim_array`）：透传 `root_symbol`, `root_addr`
+
+#### 修改 3: `src/lib/a2l.rs` — SYMBOL_LINK 生成逻辑
+
+在 `generate_measurement_block_with_compu` 和 `generate_characteristic_block_with_compu` 中：
+
+```rust
+if entry.is_bitfield() && entry.symbol_link_name.is_some() {
+    let name = entry.symbol_link_name.as_ref().unwrap();
+    let offset = entry.symbol_link_offset.unwrap_or(0);
+    output.push_str(&format!("      SYMBOL_LINK \"{}\" {}\n", name, offset));
+} else {
+    let link = symbol_link.unwrap_or(&entry.full_name);
+    output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+}
+```
+
+#### 修改 4: IPC 层（可选）
+
+`EntryInfo`（`src-tauri/src/commands.rs:62`）已有 `symbol_link: Option<String>` 字段，可在 `From` 实现中将 bitfield 的 symbol_link 组合为 `"name offset"` 格式传递给前端。如果前端不直接处理 SYMBOL_LINK，此步可省略。
+
+### 预期效果
+
+```
+// 修复前
+SYMBOL_LINK "Cdd_L9388_SFR_RX.EXCEPTIONS_CH0_5._0_.B.OPEN_LOAD" 0
+→ CANape 计算出 base + 1（错误）
+
+// 修复后
+SYMBOL_LINK "Cdd_L9388_SFR_RX" <容器偏移>
+→ CANape 计算出 base + 容器偏移（正确，与 ECU_ADDRESS 一致）
+```
+
+### 影响范围
+
+所有使用 BIT_MASK 的 bitfield MEASUREMENT/CHARACTERISTIC 变量。非 bitfield 变量不受影响。
+
+### 相关文件
+
+- `src/lib/types.rs` — `A2lEntry` 结构体（第 378-428 行）
+- `src/lib/elf.rs` — `expand_recursive`（第 336-476 行）、`expand_variable`（第 306-334 行）、`expand_multi_dim_array`（第 562-617 行）
+- `src/lib/a2l.rs` — `generate_measurement_block_with_compu`（第 184-228 行）、`generate_characteristic_block_with_compu`（第 230-272 行）
+- `src-tauri/src/commands.rs` — `EntryInfo`（第 62-88 行）
+
+---
+
 ## [OPEN] DWARF2 位域偏移计算错误 — DW_AT_bit_offset 未按存储单元转换
 
 **发现日期**: 2026-04-02
