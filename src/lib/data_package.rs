@@ -53,7 +53,9 @@ impl DataPackage {
                 type_name TEXT NOT NULL,
                 bit_offset INTEGER,
                 bit_size INTEGER,
-                array_index TEXT
+                array_index TEXT,
+                symbol_link_name TEXT,
+                symbol_link_offset INTEGER
             );
             
             CREATE INDEX IF NOT EXISTS idx_a2l_entries_name ON a2l_entries(full_name);
@@ -95,7 +97,9 @@ impl DataPackage {
                 type_name TEXT NOT NULL,
                 bit_offset INTEGER,
                 bit_size INTEGER,
-                array_index TEXT
+                array_index TEXT,
+                symbol_link_name TEXT,
+                symbol_link_offset INTEGER
             );
             
             CREATE INDEX IF NOT EXISTS idx_a2l_entries_name ON a2l_entries(full_name);
@@ -145,7 +149,9 @@ impl DataPackage {
                 type_name TEXT NOT NULL,
                 bit_offset INTEGER,
                 bit_size INTEGER,
-                array_index TEXT
+                array_index TEXT,
+                symbol_link_name TEXT,
+                symbol_link_offset INTEGER
             );
             
             CREATE INDEX IF NOT EXISTS idx_a2l_entries_name ON a2l_entries(full_name);
@@ -201,8 +207,8 @@ impl DataPackage {
             let mut stmt = tx
                 .prepare(
                     "INSERT INTO a2l_entries 
-                     (full_name, address, size, a2l_type, type_name, bit_offset, bit_size, array_index)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     (full_name, address, size, a2l_type, type_name, bit_offset, bit_size, array_index, symbol_link_name, symbol_link_offset)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 )
                 .context("无法准备插入语句")?;
 
@@ -222,6 +228,8 @@ impl DataPackage {
                     entry.bit_offset,
                     entry.bit_size,
                     array_index_str,
+                    entry.symbol_link_name,
+                    entry.symbol_link_offset,
                 ])
                 .context("无法插入条目")?;
             }
@@ -239,7 +247,7 @@ impl DataPackage {
 
     pub fn load_entries(&self) -> Result<A2lEntryStore> {
         let mut stmt = self.db.prepare(
-            "SELECT full_name, address, size, a2l_type, type_name, bit_offset, bit_size, array_index 
+            "SELECT full_name, address, size, a2l_type, type_name, bit_offset, bit_size, array_index, symbol_link_name, symbol_link_offset 
              FROM a2l_entries ORDER BY full_name"
         ).context("无法准备查询")?;
 
@@ -253,6 +261,8 @@ impl DataPackage {
                 let bit_offset: Option<usize> = row.get(5)?;
                 let bit_size: Option<usize> = row.get(6)?;
                 let array_index_str: Option<String> = row.get(7)?;
+                let symbol_link_name: Option<String> = row.get(8)?;
+                let symbol_link_offset: Option<u64> = row.get(9)?;
 
                 let array_index =
                     array_index_str.and_then(|s| serde_json::from_str::<Vec<usize>>(&s).ok());
@@ -265,6 +275,9 @@ impl DataPackage {
                     if !idx.is_empty() {
                         entry = entry.with_array_index(idx);
                     }
+                }
+                if let (Some(name), Some(offset)) = (symbol_link_name, symbol_link_offset) {
+                    entry = entry.with_symbol_link(name, offset);
                 }
 
                 Ok(entry)

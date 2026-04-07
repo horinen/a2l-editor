@@ -181,7 +181,7 @@ impl A2lGenerator {
         output
     }
 
-    fn generate_measurement_block_with_compu(
+    pub fn generate_measurement_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
         symbol_link: Option<&str>,

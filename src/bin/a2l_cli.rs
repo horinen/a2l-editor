@@ -1,6 +1,6 @@
 use a2l_editor::{
     compute_file_hash, format_file_size, A2lGenerator, Cache, CacheEntry, DataPackage, DwarfParser,
-    ElfParser, TypeInfo,
+    ElfParser, Endianness, TypeInfo,
 };
 use anyhow::Result;
 use std::path::PathBuf;
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
         }
         "entries" => {
             if args.len() < 3 {
-                eprintln!("用法: a2l-cli entries <elf文件路径> [搜索词] [-n 数量]");
+                eprintln!("用法: a2l-cli entries <elf文件路径> [搜索词] [-n 数量] [--a2l]");
                 return Ok(());
             }
             let path = PathBuf::from(&args[2]);
@@ -148,7 +148,8 @@ fn main() -> Result<()> {
                 .and_then(|i| args.get(i + 1))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(50);
-            list_a2l_entries(&path, search, limit)?;
+            let show_a2l = args.contains(&"--a2l".to_string());
+            list_a2l_entries(&path, search, limit, show_a2l)?;
         }
         "create-package" => {
             if args.len() < 3 {
@@ -194,7 +195,7 @@ fn print_usage() {
     println!("  a2l-cli dwarf-vars <elf文件> [数量]    列出 DWARF 变量及类型");
     println!("  a2l-cli struct-instances <elf文件> [数量]  列出结构体实例变量");
     println!("  a2l-cli bitfields <elf文件> [数量]     列出含位域的结构体");
-    println!("  a2l-cli entries <elf文件> [搜索词] [-n 数量]  列出 A2L 条目");
+    println!("  a2l-cli entries <elf文件> [搜索词] [-n 数量] [--a2l]  列出 A2L 条目");
     println!("  a2l-cli cache                          列出缓存");
     println!("  a2l-cli clear                          清除缓存");
 }
@@ -1009,7 +1010,12 @@ fn list_bitfields(path: &PathBuf, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn list_a2l_entries(path: &PathBuf, search: Option<&str>, limit: usize) -> Result<()> {
+fn list_a2l_entries(
+    path: &PathBuf,
+    search: Option<&str>,
+    limit: usize,
+    show_a2l: bool,
+) -> Result<()> {
     println!("加载 A2L 条目...");
     let start = Instant::now();
 
@@ -1080,28 +1086,38 @@ fn list_a2l_entries(path: &PathBuf, search: Option<&str>, limit: usize) -> Resul
     println!();
 
     for entry in entries.iter().take(limit) {
-        let bit_info = match (entry.bit_offset, entry.bit_size) {
-            (Some(bo), Some(bs)) => format!(" bits[{},{}]", bo, bo + bs - 1),
-            _ => String::new(),
-        };
-        let arr_info = entry
-            .array_index
-            .as_ref()
-            .map(|idx| {
-                format!(
-                    " [{}]",
-                    idx.iter()
-                        .map(|i| i.to_string())
-                        .collect::<Vec<_>>()
-                        .join("][")
-                )
-            })
-            .unwrap_or_default();
+        if show_a2l {
+            let block = A2lGenerator::generate_measurement_block_with_compu(
+                entry,
+                None,
+                None,
+                Endianness::Little,
+            );
+            print!("{}", block);
+        } else {
+            let bit_info = match (entry.bit_offset, entry.bit_size) {
+                (Some(bo), Some(bs)) => format!(" bits[{},{}]", bo, bo + bs - 1),
+                _ => String::new(),
+            };
+            let arr_info = entry
+                .array_index
+                .as_ref()
+                .map(|idx| {
+                    format!(
+                        " [{}]",
+                        idx.iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<_>>()
+                            .join("][")
+                    )
+                })
+                .unwrap_or_default();
 
-        println!(
-            "{:50} @ 0x{:08X} {:3}B {}{}{}",
-            entry.full_name, entry.address, entry.size, entry.a2l_type, arr_info, bit_info
-        );
+            println!(
+                "{:50} @ 0x{:08X} {:3}B {}{}{}",
+                entry.full_name, entry.address, entry.size, entry.a2l_type, arr_info, bit_info
+            );
+        }
     }
 
     if entries.len() > limit {
