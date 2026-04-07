@@ -2,7 +2,7 @@
   "project_type": "tauri",
   "app_path": "target/debug/a2l-editor-tauri",
   "app_name": "A2L Editor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "features": [
     "ELF 文件加载",
     "数据包加载",
@@ -31,12 +31,42 @@
     "set_endianness"
   ],
   "test_suites": [
-    { "name": "app_launch", "priority": "high", "cases": 2, "description": "应用启动和基本界面" },
-    { "name": "tauri_commands", "priority": "high", "cases": 6, "description": "Tauri 命令调用验证" },
-    { "name": "ui_interactions", "priority": "high", "cases": 8, "description": "UI 组件交互测试" },
-    { "name": "dialogs", "priority": "high", "cases": 3, "description": "对话框测试" },
-    { "name": "error_handling", "priority": "high", "cases": 4, "description": "错误处理测试" },
-    { "name": "long_running", "priority": "high", "cases": 1, "description": "长时间操作测试（不可跳过）" }
+    {
+      "name": "app_launch",
+      "priority": "high",
+      "cases": 2,
+      "description": "应用启动和基本界面"
+    },
+    {
+      "name": "tauri_commands",
+      "priority": "high",
+      "cases": 6,
+      "description": "Tauri 命令调用验证"
+    },
+    {
+      "name": "ui_interactions",
+      "priority": "high",
+      "cases": 8,
+      "description": "UI 组件交互测试"
+    },
+    {
+      "name": "dialogs",
+      "priority": "high",
+      "cases": 3,
+      "description": "对话框测试"
+    },
+    {
+      "name": "error_handling",
+      "priority": "high",
+      "cases": 4,
+      "description": "错误处理测试"
+    },
+    {
+      "name": "long_running",
+      "priority": "high",
+      "cases": 1,
+      "description": "长时间操作测试（不可跳过）"
+    }
   ],
   "total_cases": 24
 }

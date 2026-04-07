@@ -11,9 +11,14 @@
   } from '$lib/stores';
   import { searchA2lVariables } from '$lib/commands';
 
-  let showMenu = $state(false);
+  import { getVersion } from '@tauri-apps/api/app';
 
-  const VERSION = 'v0.1.0';
+  let showMenu = $state(false);
+  let version = $state('');
+
+  $effect(() => {
+    getVersion().then(v => version = 'v' + v);
+  });
 
   async function handleOpenElf() {
     const selected = await open({
@@ -167,7 +172,7 @@
       {$endianness === 'little' ? '小端' : '大端'}
     </button>
     <button class="icon-btn theme-btn" onclick={handleCycleTheme} title="切换主题">🎨</button>
-    <span class="version">{VERSION}</span>
+    <span class="version">{version}</span>
   </div>
 </header>
 

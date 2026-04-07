@@ -1,8 +1,13 @@
 <script lang="ts">
   import { showAboutDialog } from '$lib/stores';
+  import { getVersion } from '@tauri-apps/api/app';
   import { fly } from 'svelte/transition';
 
-  const VERSION = 'v0.1.0';
+  let version = $state('');
+
+  $effect(() => {
+    getVersion().then(v => version = 'v' + v);
+  });
 
   function close() {
     showAboutDialog.set(false);
@@ -26,7 +31,7 @@
       <div class="content">
         <div class="logo">
           <h2>A2L Editor</h2>
-          <p class="version">{VERSION}</p>
+          <p class="version">{version}</p>
         </div>
         
         <p class="desc">从 ELF/DWARF 生成 A2L 文件的桌面工具</p>

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "a2l-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "a2l-editor-tauri"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a2l-editor",
  "clap",
