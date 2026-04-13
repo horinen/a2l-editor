@@ -2,7 +2,7 @@ use crate::types::{EnumVariant, StructMember, TypeEncoding, TypeInfo, TypeKind, 
 use anyhow::{Context, Result};
 use gimli::{EndianSlice, LittleEndian};
 use object::{Object, ObjectSection};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 type DwarfReader = EndianSlice<'static, LittleEndian>;
 
@@ -190,43 +190,166 @@ impl DwarfParser {
             }
         }
 
-        self.resolve_all_member_types();
-        self.resolve_type_refs();
+        self.resolve_type_graph();
         self.resolve_array_element_types();
+        self.normalize_bitfield_offsets();
 
         Ok(())
     }
 
-    fn resolve_type_refs(&mut self) {
+    fn resolve_type_graph(&mut self) {
         let refs: Vec<(u64, u64)> = self.type_refs.iter().map(|(k, v)| (*k, *v)).collect();
-        let max_iterations = 100;
 
-        for _ in 0..max_iterations {
-            let mut changed = false;
+        // 构建 DAG: Kahn 拓扑排序
+        let mut in_deg: HashMap<u64, usize> = HashMap::new();
+        let mut dependents: HashMap<u64, Vec<u64>> = HashMap::new();
 
-            for &(from_offset, to_offset) in &refs {
-                if to_offset > 0 {
-                    if let Some(target_type) = self.type_cache.get(&to_offset).cloned() {
-                        if target_type.size > 0 {
-                            if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
-                                if type_info.size == 0 {
-                                    type_info.size = target_type.size;
-                                    type_info.encoding = target_type.encoding;
-                                    type_info.kind = target_type.kind;
-                                    type_info.members = target_type.members.clone();
-                                    type_info.variants = target_type.variants.clone();
-                                    type_info.array_dims = target_type.array_dims.clone();
-                                    type_info.pointer_target = target_type.pointer_target.clone();
-                                    changed = true;
-                                }
+        for &(from, to) in &refs {
+            *in_deg.entry(from).or_insert(0) += 1;
+            dependents.entry(to).or_default().push(from);
+        }
+
+        // 入度为 0 的节点：目标类型已解析（size > 0）
+        let mut queue: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+        for &(from, to) in &refs {
+            if self
+                .type_cache
+                .get(&to)
+                .map(|t| t.size > 0)
+                .unwrap_or(false)
+            {
+                if in_deg.get(&from).copied().unwrap_or(0) == 1 {
+                    queue.push_back(from);
+                }
+            }
+        }
+
+        let mut sorted: Vec<u64> = Vec::new();
+        let mut visited_sort: HashSet<u64> = HashSet::new();
+        while let Some(node) = queue.pop_front() {
+            if visited_sort.contains(&node) {
+                continue;
+            }
+            visited_sort.insert(node);
+            sorted.push(node);
+
+            if let Some(deps) = dependents.get(&node) {
+                for &dep in deps {
+                    let deg = in_deg.get_mut(&dep).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(dep);
+                    }
+                }
+            }
+        }
+
+        // 按拓扑序解析 typedef/const/volatile
+        for offset in &sorted {
+            if let Some(&target_offset) = self.type_refs.get(offset) {
+                if let Some(target_type) = self.type_cache.get(&target_offset).cloned() {
+                    if target_type.size > 0 {
+                        if let Some(type_info) = self.type_cache.get_mut(offset) {
+                            if type_info.size == 0 {
+                                let own_name = type_info.name.clone();
+                                type_info.size = target_type.size;
+                                type_info.encoding = target_type.encoding;
+                                type_info.kind = target_type.kind;
+                                type_info.members = target_type.members;
+                                type_info.variants = target_type.variants;
+                                type_info.array_dims = target_type.array_dims;
+                                type_info.pointer_target = target_type.pointer_target;
+                                type_info.name = own_name;
                             }
                         }
                     }
                 }
             }
+        }
 
-            if !changed {
-                break;
+        // 兜底：处理拓扑排序未覆盖的节点
+        for &(from_offset, to_offset) in &refs {
+            if to_offset > 0 {
+                if let Some(target_type) = self.type_cache.get(&to_offset).cloned() {
+                    if target_type.size > 0 {
+                        if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
+                            if type_info.size == 0 {
+                                let own_name = type_info.name.clone();
+                                type_info.size = target_type.size;
+                                type_info.encoding = target_type.encoding;
+                                type_info.kind = target_type.kind;
+                                type_info.members = target_type.members;
+                                type_info.variants = target_type.variants;
+                                type_info.array_dims = target_type.array_dims;
+                                type_info.pointer_target = target_type.pointer_target;
+                                type_info.name = own_name;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 第二轮：填充 StructMember 的 type_name / type_size
+        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = self
+            .type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+            .map(|(offset, type_info)| {
+                let member_updates: Vec<(usize, String, usize)> = type_info
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, member)| {
+                        member.type_offset.and_then(|type_offset| {
+                            if type_offset > 0 {
+                                self.type_cache
+                                    .get(&type_offset)
+                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .collect();
+                (*offset, member_updates)
+            })
+            .collect();
+
+        for (offset, updates) in resolutions {
+            if let Some(type_info) = self.type_cache.get_mut(&offset) {
+                for (idx, type_name, type_size) in updates {
+                    let member = &mut type_info.members[idx];
+                    member.type_name = type_name;
+                    if member.type_size == 0 {
+                        member.type_size = type_size;
+                    }
+                }
+            }
+        }
+    }
+
+    fn normalize_bitfield_offsets(&mut self) {
+        let offsets: Vec<u64> = self
+            .type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+            .map(|(offset, _)| *offset)
+            .collect();
+
+        for offset in offsets {
+            if let Some(type_info) = self.type_cache.get_mut(&offset) {
+                for member in &mut type_info.members {
+                    if member.is_bitfield() {
+                        // DWARF2 格式: absolute_lsb = offset * 8 + (type_size * 8 - bit_offset - bit_size)
+                        let storage_bits = member.type_size * 8;
+                        let raw_bo = member.bit_offset.unwrap_or(0);
+                        let raw_bs = member.bit_size.unwrap_or(0);
+                        let absolute_lsb =
+                            member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs);
+                        member.bit_offset = Some(absolute_lsb);
+                    }
+                }
             }
         }
     }
@@ -276,45 +399,6 @@ impl DwarfParser {
             }
             if !changed {
                 break;
-            }
-        }
-    }
-
-    fn resolve_all_member_types(&mut self) {
-        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = self
-            .type_cache
-            .iter()
-            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
-            .map(|(offset, type_info)| {
-                let member_updates: Vec<(usize, String, usize)> = type_info
-                    .members
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, member)| {
-                        member.type_offset.and_then(|type_offset| {
-                            if type_offset > 0 {
-                                self.type_cache
-                                    .get(&type_offset)
-                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect();
-                (*offset, member_updates)
-            })
-            .collect();
-
-        for (offset, updates) in resolutions {
-            if let Some(type_info) = self.type_cache.get_mut(&offset) {
-                for (idx, type_name, type_size) in updates {
-                    let member = &mut type_info.members[idx];
-                    member.type_name = type_name;
-                    if member.type_size == 0 {
-                        member.type_size = type_size;
-                    }
-                }
             }
         }
     }

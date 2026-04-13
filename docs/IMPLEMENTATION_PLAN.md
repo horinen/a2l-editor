@@ -47,7 +47,7 @@
 
 ---
 
-### Phase 1: dwarf.rs 规范化
+### Phase 1: dwarf.rs 规范化 ✅ 已完成
 
 **文件: `src/lib/dwarf.rs`**
 
