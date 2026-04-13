@@ -191,8 +191,8 @@ impl DwarfParser {
         }
 
         self.resolve_all_member_types();
-        self.resolve_array_element_types();
         self.resolve_type_refs();
+        self.resolve_array_element_types();
 
         Ok(())
     }
@@ -245,20 +245,37 @@ impl DwarfParser {
             .map(|(k, v)| (*k, *v))
             .collect();
 
-        for array_offset in array_offsets {
-            if let Some(&elem_offset) = elem_type_offsets.get(&array_offset) {
-                if elem_offset > 0 {
-                    if let Some(elem_type) = self.type_cache.get(&elem_offset).cloned() {
-                        if let Some(array_type) = self.type_cache.get_mut(&array_offset) {
-                            array_type.pointer_target = Some(Box::new(elem_type));
-                            array_type.encoding = array_type
-                                .pointer_target
-                                .as_ref()
-                                .map(|e| e.encoding)
-                                .unwrap_or(TypeEncoding::Unsigned);
+        let max_iterations = 10;
+        for _ in 0..max_iterations {
+            let mut changed = false;
+            for &array_offset in &array_offsets {
+                if let Some(&elem_offset) = elem_type_offsets.get(&array_offset) {
+                    if elem_offset > 0 {
+                        if let Some(elem_type) = self.type_cache.get(&elem_offset).cloned() {
+                            if let Some(array_type) = self.type_cache.get_mut(&array_offset) {
+                                let needs_update = match &array_type.pointer_target {
+                                    None => true,
+                                    Some(current) => {
+                                        current.size != elem_type.size
+                                            || current.kind != elem_type.kind
+                                    }
+                                };
+                                if needs_update {
+                                    array_type.pointer_target = Some(Box::new(elem_type));
+                                    array_type.encoding = array_type
+                                        .pointer_target
+                                        .as_ref()
+                                        .map(|e| e.encoding)
+                                        .unwrap_or(TypeEncoding::Unsigned);
+                                    changed = true;
+                                }
+                            }
                         }
                     }
                 }
+            }
+            if !changed {
+                break;
             }
         }
     }
