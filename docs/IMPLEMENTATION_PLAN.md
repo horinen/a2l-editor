@@ -77,7 +77,7 @@
 
 ---
 
-### Phase 2: elf.rs 拆分（高风险）
+### Phase 2: elf.rs 拆分（高风险） ✅ 已完成
 
 **文件: `src/lib/elf.rs`**
 

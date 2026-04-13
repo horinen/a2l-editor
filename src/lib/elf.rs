@@ -34,6 +34,14 @@ pub struct DwarfStats {
     pub enum_values: usize,
 }
 
+struct ExpandContext<'a> {
+    type_cache: &'a HashMap<u64, TypeInfo>,
+    store: &'a mut A2lEntryStore,
+    visited: HashSet<u64>,
+    root_symbol: &'a str,
+    root_addr: u64,
+}
+
 impl ElfParser {
     pub fn parse(path: &Path) -> Result<Self> {
         Self::parse_with_depth(path, false)
@@ -53,48 +61,46 @@ impl ElfParser {
         let obj = object::File::parse(&*mmap).context("无法解析 ELF 文件")?;
 
         let (variables, has_dwarf, dwarf_stats, type_cache, a2l_entries) = if deep {
-            let parser = DwarfParser::parse(&mmap).unwrap_or_else(|_| DwarfParser::new());
-            let has_dwarf = parser.has_dwarf_info();
+            let parser = DwarfParser::parse(&mmap).context("DWARF 解析失败")?;
 
-            let stats = if has_dwarf {
-                let (
-                    base_types,
-                    structs,
-                    unions,
-                    enums,
-                    arrays,
-                    pointers,
-                    typedefs,
-                    vars,
-                    members,
-                    values,
-                ) = parser.get_stats();
-                Some(DwarfStats {
-                    base_types,
-                    structs,
-                    unions,
-                    enums,
-                    arrays,
-                    pointers,
-                    typedefs,
-                    variables: vars,
-                    struct_members: members,
-                    enum_values: values,
-                })
-            } else {
-                None
-            };
+            if !parser.has_dwarf_info() {
+                anyhow::bail!("ELF 文件不包含 DWARF 调试信息，深度解析需要 DWARF 数据");
+            }
 
-            let variables = if parser.global_variable_count() > 0 {
-                Self::extract_variables_from_dwarf(&parser)
-            } else {
-                Self::extract_variables_from_elf(&obj)
-            };
+            let (
+                base_types,
+                structs,
+                unions,
+                enums,
+                arrays,
+                pointers,
+                typedefs,
+                vars,
+                members,
+                values,
+            ) = parser.get_stats();
+            let stats = Some(DwarfStats {
+                base_types,
+                structs,
+                unions,
+                enums,
+                arrays,
+                pointers,
+                typedefs,
+                variables: vars,
+                struct_members: members,
+                enum_values: values,
+            });
 
+            if parser.global_variable_count() == 0 {
+                anyhow::bail!("DWARF 中未找到全局变量");
+            }
+
+            let variables = Self::extract_variables_from_dwarf(&parser);
             let tc = parser.type_cache().clone();
             let entries = Self::expand_all_entries(&variables, &tc);
 
-            (variables, has_dwarf, stats, Some(tc), Some(entries))
+            (variables, true, stats, Some(tc), Some(entries))
         } else {
             let variables = Self::extract_variables_from_elf(&obj);
             (variables, false, None, None, None)
@@ -155,7 +161,7 @@ impl ElfParser {
         let mut seen = HashSet::new();
 
         let sections: Vec<_> = obj.sections().collect();
-        let section_map: std::collections::HashMap<_, _> = sections
+        let section_map: HashMap<_, _> = sections
             .iter()
             .map(|s| (s.index(), s.name().unwrap_or("")))
             .collect();
@@ -199,7 +205,13 @@ impl ElfParser {
                 continue;
             }
 
-            let type_name = Self::infer_type_name(size);
+            let type_name = match size {
+                1 => "uint8_t".to_string(),
+                2 => "uint16_t".to_string(),
+                4 => "uint32_t".to_string(),
+                8 => "uint64_t".to_string(),
+                _ => format!("uint8_t[{}]", size),
+            };
 
             variables.push(Variable::new(
                 name.to_string(),
@@ -214,16 +226,6 @@ impl ElfParser {
 
         variables.sort_by(|a, b| a.name.cmp(&b.name));
         variables
-    }
-
-    fn infer_type_name(size: usize) -> String {
-        match size {
-            1 => "uint8_t".to_string(),
-            2 => "uint16_t".to_string(),
-            4 => "uint32_t".to_string(),
-            8 => "uint64_t".to_string(),
-            _ => format!("uint8_t[{}]", size),
-        }
     }
 
     pub fn variables(&self) -> &[Variable] {
@@ -277,183 +279,173 @@ impl ElfParser {
         let mut store = A2lEntryStore::new();
 
         for var in variables {
-            Self::expand_variable(var, type_cache, &mut store);
+            let mut ctx = ExpandContext {
+                type_cache,
+                store: &mut store,
+                visited: HashSet::new(),
+                root_symbol: &var.name,
+                root_addr: var.address,
+            };
+            Self::expand_entry(&var.name, var.address, &var.type_info, 0, &mut ctx);
         }
 
         store
     }
 
-    fn expand_variable(
-        var: &Variable,
-        type_cache: &HashMap<u64, TypeInfo>,
-        store: &mut A2lEntryStore,
-    ) {
-        let mut visited: HashSet<u64> = HashSet::new();
-
-        Self::expand_recursive(
-            &var.name,
-            var.address,
-            &var.type_info,
-            0,
-            &mut visited,
-            type_cache,
-            store,
-            None,
-            Some(&var.name),
-            Some(var.address),
-        );
-    }
-
-    fn expand_recursive(
-        prefix: &str,
-        base_addr: u64,
+    fn expand_entry(
+        name: &str,
+        addr: u64,
         type_info: &TypeInfo,
         depth: usize,
-        visited: &mut HashSet<u64>,
-        type_cache: &HashMap<u64, TypeInfo>,
-        store: &mut A2lEntryStore,
-        array_index: Option<Vec<usize>>,
-        root_symbol: Option<&str>,
-        root_addr: Option<u64>,
+        ctx: &mut ExpandContext,
     ) {
         if depth > MAX_NESTING_DEPTH {
             return;
         }
 
-        if type_info.offset > 0 && visited.contains(&type_info.offset) {
+        if type_info.offset > 0 && ctx.visited.contains(&type_info.offset) {
             return;
         }
-        visited.insert(type_info.offset);
-
-        let a2l_type = infer_a2l_type_from_encoding(type_info.size, type_info.encoding);
-        store.add(
-            A2lEntry::new(
-                prefix.to_string(),
-                base_addr,
-                type_info.size,
-                a2l_type.to_string(),
-                type_info.name.clone(),
-            )
-            .with_array_index(array_index.clone().unwrap_or_default()),
-        );
+        ctx.visited.insert(type_info.offset);
 
         match type_info.kind {
             TypeKind::Struct | TypeKind::Union => {
-                let bitfield_groups = Self::compute_bitfield_groups(&type_info.members);
-
-                for member in &type_info.members {
-                    let member_full_name = if member.name == "_" {
-                        prefix.to_string()
-                    } else {
-                        format!("{}.{}", prefix, member.name)
-                    };
-
-                    if member.is_bitfield() {
-                        if let Some(bg) = bitfield_groups.get(&member.offset) {
-                            let container_addr = base_addr + bg.container_offset as u64;
-                            let container_a2l_type =
-                                infer_a2l_type_from_encoding(bg.container_size, type_info.encoding);
-                            let byte_in_container =
-                                member.offset.saturating_sub(bg.container_offset);
-                            let storage_bits = member.type_size * 8;
-                            let raw_bo = member.bit_offset.unwrap_or(0);
-                            let raw_bs = member.bit_size.unwrap_or(0);
-                            let actual_bit_offset = byte_in_container * 8
-                                + storage_bits.saturating_sub(raw_bo + raw_bs);
-                            let mut entry = A2lEntry::new(
-                                member_full_name,
-                                container_addr,
-                                bg.container_size,
-                                container_a2l_type.to_string(),
-                                member.type_name.clone(),
-                            )
-                            .with_bitfield(actual_bit_offset, raw_bs);
-                            if let (Some(sym), Some(raddr)) = (root_symbol, root_addr) {
-                                entry = entry.with_symbol_link(
-                                    sym.to_string(),
-                                    container_addr.saturating_sub(raddr),
-                                );
-                            }
-                            store.add(entry);
-                        }
-                    } else {
-                        let member_addr = base_addr + member.offset as u64;
-                        if let Some(type_offset) = member.type_offset {
-                            if type_offset > 0 {
-                                if let Some(member_type) = type_cache.get(&type_offset) {
-                                    Self::expand_recursive(
-                                        &member_full_name,
-                                        member_addr,
-                                        member_type,
-                                        depth + 1,
-                                        visited,
-                                        type_cache,
-                                        store,
-                                        None,
-                                        root_symbol,
-                                        root_addr,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+                Self::expand_composite(name, addr, type_info, depth, ctx);
             }
             TypeKind::Array => {
-                let (effective_dims, final_elem_type, final_elem_size) =
-                    Self::flatten_array_type(type_info, 0);
-
-                let total_elements: usize = effective_dims.iter().product();
-                let original_total: usize = type_info.array_dims.iter().product();
-
-                if original_total <= MAX_ARRAY_EXPAND && original_total > 0 {
-                    if let Some(ref elem_type) = final_elem_type {
-                        let base_idx = array_index.clone().unwrap_or_default();
-                        Self::expand_multi_dim_array(
-                            prefix,
-                            base_addr,
-                            elem_type,
-                            &effective_dims,
-                            final_elem_size,
-                            depth,
-                            visited,
-                            type_cache,
-                            store,
-                            &base_idx,
-                            root_symbol,
-                            root_addr,
-                        );
-                    } else if total_elements > 0 {
-                        for i in 0..total_elements {
-                            let multi_idx = Self::flat_to_multi_index(i, &effective_dims);
-                            let idx: Vec<usize> = array_index
-                                .clone()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .chain(multi_idx.into_iter())
-                                .collect();
-                            let elem_name = Self::format_array_element_name(prefix, &idx);
-                            let elem_addr = base_addr + (i * final_elem_size) as u64;
-                            let elem_a2l_type =
-                                infer_a2l_type_from_encoding(final_elem_size, type_info.encoding);
-                            store.add(
-                                A2lEntry::new(
-                                    elem_name,
-                                    elem_addr,
-                                    final_elem_size,
-                                    elem_a2l_type.to_string(),
-                                    type_info.name.clone(),
-                                )
-                                .with_array_index(idx),
-                            );
-                        }
-                    }
-                }
+                Self::expand_array(name, addr, type_info, depth, ctx);
             }
-            _ => {}
+            TypeKind::Primitive | TypeKind::Enum | TypeKind::Pointer | TypeKind::Typedef => {
+                let a2l_type = infer_a2l_type_from_encoding(type_info.size, type_info.encoding);
+                ctx.store.add(A2lEntry::new(
+                    name.to_string(),
+                    addr,
+                    type_info.size,
+                    a2l_type.to_string(),
+                    type_info.name.clone(),
+                ));
+            }
         }
 
-        visited.remove(&type_info.offset);
+        ctx.visited.remove(&type_info.offset);
+    }
+
+    fn expand_composite(
+        prefix: &str,
+        base_addr: u64,
+        type_info: &TypeInfo,
+        depth: usize,
+        ctx: &mut ExpandContext,
+    ) {
+        let bitfield_groups = Self::compute_bitfield_groups(&type_info.members);
+
+        for member in &type_info.members {
+            let full_name = if member.name == "_" {
+                prefix.to_string()
+            } else {
+                format!("{}.{}", prefix, member.name)
+            };
+
+            if member.is_bitfield() {
+                Self::expand_bitfield(&full_name, base_addr, member, &bitfield_groups, ctx);
+            } else {
+                Self::expand_member(&full_name, base_addr, member, depth, ctx);
+            }
+        }
+    }
+
+    fn expand_bitfield(
+        name: &str,
+        base_addr: u64,
+        member: &crate::types::StructMember,
+        groups: &HashMap<usize, BitfieldGroup>,
+        ctx: &mut ExpandContext,
+    ) {
+        let bg = match groups.get(&member.offset) {
+            Some(g) => g,
+            None => return,
+        };
+
+        let container_addr = base_addr + bg.container_offset as u64;
+        let container_a2l_type =
+            infer_a2l_type_from_encoding(bg.container_size, Default::default());
+        let bit_offset = member.bit_offset.unwrap_or(0);
+        let bit_size = member.bit_size.unwrap_or(0);
+        let symbol_link_offset = container_addr.saturating_sub(ctx.root_addr);
+
+        ctx.store.add(
+            A2lEntry::new(
+                name.to_string(),
+                container_addr,
+                bg.container_size,
+                container_a2l_type.to_string(),
+                member.type_name.clone(),
+            )
+            .with_bitfield(bit_offset, bit_size)
+            .with_symbol_link(ctx.root_symbol.to_string(), symbol_link_offset),
+        );
+    }
+
+    fn expand_member(
+        name: &str,
+        base_addr: u64,
+        member: &crate::types::StructMember,
+        depth: usize,
+        ctx: &mut ExpandContext,
+    ) {
+        let member_addr = base_addr + member.offset as u64;
+        let type_offset = match member.type_offset {
+            Some(off) if off > 0 => off,
+            _ => return,
+        };
+
+        if let Some(member_type) = ctx.type_cache.get(&type_offset) {
+            Self::expand_entry(name, member_addr, member_type, depth + 1, ctx);
+        }
+    }
+
+    fn expand_array(
+        prefix: &str,
+        base_addr: u64,
+        type_info: &TypeInfo,
+        depth: usize,
+        ctx: &mut ExpandContext,
+    ) {
+        let (effective_dims, final_elem_type, final_elem_size) =
+            Self::flatten_array_type(type_info, 0);
+
+        let original_total: usize = type_info.array_dims.iter().product();
+
+        if original_total > MAX_ARRAY_EXPAND || original_total == 0 {
+            return;
+        }
+
+        if let Some(ref elem_type) = final_elem_type {
+            Self::expand_multi_dim_array(
+                prefix,
+                base_addr,
+                elem_type,
+                &effective_dims,
+                final_elem_size,
+                depth,
+                ctx,
+            );
+        } else {
+            let total_elements: usize = effective_dims.iter().product();
+            for i in 0..total_elements {
+                let elem_name = format!("{}._{}_", prefix, i);
+                let elem_addr = base_addr + (i * final_elem_size) as u64;
+                let elem_a2l_type =
+                    infer_a2l_type_from_encoding(final_elem_size, type_info.encoding);
+                ctx.store.add(A2lEntry::new(
+                    elem_name,
+                    elem_addr,
+                    final_elem_size,
+                    elem_a2l_type.to_string(),
+                    type_info.name.clone(),
+                ));
+            }
+        }
     }
 
     fn compute_bitfield_groups(
@@ -492,14 +484,6 @@ impl ElfParser {
         groups
     }
 
-    fn format_array_element_name(prefix: &str, indices: &[usize]) -> String {
-        if indices.is_empty() {
-            return prefix.to_string();
-        }
-        let idx_str: Vec<String> = indices.iter().map(|i| format!("._{}_", i)).collect();
-        format!("{}{}", prefix, idx_str.join(""))
-    }
-
     fn flatten_array_type(
         type_info: &TypeInfo,
         base_elem_size: usize,
@@ -536,18 +520,6 @@ impl ElfParser {
         (all_dims, elem_type.map(|b| *b), current_size)
     }
 
-    fn flat_to_multi_index(flat_idx: usize, dims: &[usize]) -> Vec<usize> {
-        let mut result = Vec::with_capacity(dims.len());
-        let mut remaining = flat_idx;
-        for i in (1..dims.len()).rev() {
-            let stride: usize = dims[i + 1..].iter().product();
-            result.push(remaining / stride);
-            remaining %= stride;
-        }
-        result.push(remaining);
-        result
-    }
-
     fn expand_multi_dim_array(
         prefix: &str,
         base_addr: u64,
@@ -555,12 +527,7 @@ impl ElfParser {
         dims: &[usize],
         elem_size: usize,
         depth: usize,
-        visited: &mut HashSet<u64>,
-        type_cache: &HashMap<u64, TypeInfo>,
-        store: &mut A2lEntryStore,
-        base_idx: &[usize],
-        root_symbol: Option<&str>,
-        root_addr: Option<u64>,
+        ctx: &mut ExpandContext,
     ) {
         if dims.is_empty() {
             let fixed_elem_type = if elem_type.size == 0 {
@@ -570,18 +537,7 @@ impl ElfParser {
             } else {
                 elem_type.clone()
             };
-            Self::expand_recursive(
-                prefix,
-                base_addr,
-                &fixed_elem_type,
-                depth,
-                visited,
-                type_cache,
-                store,
-                Some(base_idx.to_vec()),
-                root_symbol,
-                root_addr,
-            );
+            Self::expand_entry(prefix, base_addr, &fixed_elem_type, depth, ctx);
             return;
         }
 
@@ -590,8 +546,6 @@ impl ElfParser {
         let stride: usize = remaining_dims.iter().product::<usize>() * elem_size;
 
         for i in 0..current_dim {
-            let mut full_idx = base_idx.to_vec();
-            full_idx.push(i);
             let elem_name = format!("{}._{}_", prefix, i);
             let elem_addr = base_addr + (i * stride) as u64;
             Self::expand_multi_dim_array(
@@ -601,12 +555,7 @@ impl ElfParser {
                 remaining_dims,
                 elem_size,
                 depth,
-                visited,
-                type_cache,
-                store,
-                &full_idx,
-                root_symbol,
-                root_addr,
+                ctx,
             );
         }
     }
