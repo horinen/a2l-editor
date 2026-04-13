@@ -278,41 +278,6 @@ impl EnumVariant {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheEntry {
-    pub file_hash: String,
-    pub file_path: String,
-    pub file_size: u64,
-    pub modified_time: u64,
-    pub variable_count: usize,
-    pub parse_time_ms: u64,
-    pub created_at: i64,
-    pub has_dwarf: bool,
-}
-
-impl CacheEntry {
-    pub fn new(
-        file_hash: String,
-        file_path: String,
-        file_size: u64,
-        modified_time: u64,
-        variable_count: usize,
-        parse_time_ms: u64,
-        has_dwarf: bool,
-    ) -> Self {
-        Self {
-            file_hash,
-            file_path,
-            file_size,
-            modified_time,
-            variable_count,
-            parse_time_ms,
-            created_at: chrono::Utc::now().timestamp(),
-            has_dwarf,
-        }
-    }
-}
-
 pub fn infer_a2l_type(size: usize, type_name: &str) -> &'static str {
     let lower = type_name.to_lowercase();
 
