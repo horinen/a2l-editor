@@ -1126,13 +1126,12 @@ pub fn analyze_variables_with_dwarf(variables: &mut [Variable], elf_data: &[u8])
     for var in variables.iter_mut() {
         if let Some(&type_offset) = parser.variable_types.get(&var.name) {
             if let Some(type_info) = parser.type_cache.get(&type_offset) {
-                var.type_info = Some(type_info.clone());
+                var.type_info = type_info.clone();
                 continue;
             }
         }
 
-        let type_info = infer_type_from_name(&var.name, var.size);
-        var.type_info = Some(type_info);
+        var.type_info = infer_type_from_name(&var.name, var.size);
     }
 
     Ok(has_dwarf)

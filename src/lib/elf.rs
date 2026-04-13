@@ -1,6 +1,6 @@
 use crate::dwarf::DwarfParser;
 use crate::types::{
-    infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, StructMember, TypeInfo, TypeKind,
+    infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, BitfieldGroup, TypeInfo, TypeKind,
     Variable, MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
 };
 use anyhow::{Context, Result};
@@ -85,13 +85,11 @@ impl ElfParser {
                 None
             };
 
-            let mut variables = if parser.global_variable_count() > 0 {
+            let variables = if parser.global_variable_count() > 0 {
                 Self::extract_variables_from_dwarf(&parser)
             } else {
                 Self::extract_variables_from_elf(&obj)
             };
-
-            Self::enrich_variables_with_types(&mut variables, &parser);
 
             let tc = parser.type_cache().clone();
             let entries = Self::expand_all_entries(&variables, &tc);
@@ -122,26 +120,26 @@ impl ElfParser {
                 continue;
             }
 
-            let (size, type_name, type_info) = if dv.type_offset > 0 {
-                if let Some(ti) = type_cache.get(&dv.type_offset) {
-                    (ti.size, ti.name.clone(), Some(ti.clone()))
-                } else {
-                    (0, "unknown".to_string(), None)
-                }
+            let type_info = if dv.type_offset > 0 {
+                type_cache.get(&dv.type_offset).cloned().unwrap_or_else(|| {
+                    panic!(
+                        "type_offset 0x{:x} 不在 type_cache 中（变量 {}）",
+                        dv.type_offset, dv.name
+                    )
+                })
             } else {
-                (0, "unknown".to_string(), None)
+                continue;
             };
 
-            if size == 0 {
+            if type_info.size == 0 {
                 continue;
             }
 
             variables.push(Variable {
                 name: dv.name.clone(),
                 address: dv.address,
-                size,
-                type_name,
-                section: String::new(),
+                size: type_info.size,
+                type_name: type_info.name.clone(),
                 type_info,
             });
 
@@ -207,8 +205,8 @@ impl ElfParser {
                 name.to_string(),
                 address,
                 size,
-                type_name,
-                section_name.to_string(),
+                type_name.clone(),
+                TypeInfo::primitive(type_name, size, Default::default()),
             ));
 
             seen.insert(name.to_string());
@@ -216,24 +214,6 @@ impl ElfParser {
 
         variables.sort_by(|a, b| a.name.cmp(&b.name));
         variables
-    }
-
-    fn enrich_variables_with_types(variables: &mut [Variable], parser: &DwarfParser) {
-        let type_cache = parser.type_cache();
-        let variable_types = parser.variable_types();
-
-        for var in variables.iter_mut() {
-            if var.type_info.is_none() {
-                if let Some(&type_offset) = variable_types.get(&var.name) {
-                    if let Some(type_info) = type_cache.get(&type_offset) {
-                        var.type_info = Some(type_info.clone());
-                        if var.type_name.starts_with("uint") {
-                            var.type_name = type_info.name.clone();
-                        }
-                    }
-                }
-            }
-        }
     }
 
     fn infer_type_name(size: usize) -> String {
@@ -310,29 +290,18 @@ impl ElfParser {
     ) {
         let mut visited: HashSet<u64> = HashSet::new();
 
-        if let Some(ref type_info) = var.type_info {
-            Self::expand_recursive(
-                &var.name,
-                var.address,
-                type_info,
-                0,
-                &mut visited,
-                type_cache,
-                store,
-                None,
-                Some(&var.name),
-                Some(var.address),
-            );
-        } else {
-            let a2l_type = infer_a2l_type_from_encoding(var.size, Default::default());
-            store.add(A2lEntry::new(
-                var.name.clone(),
-                var.address,
-                var.size,
-                a2l_type.to_string(),
-                var.type_name.clone(),
-            ));
-        }
+        Self::expand_recursive(
+            &var.name,
+            var.address,
+            &var.type_info,
+            0,
+            &mut visited,
+            type_cache,
+            store,
+            None,
+            Some(&var.name),
+            Some(var.address),
+        );
     }
 
     fn expand_recursive(
@@ -380,13 +349,12 @@ impl ElfParser {
                     };
 
                     if member.is_bitfield() {
-                        if let Some(&(container_offset, container_size)) =
-                            bitfield_groups.get(&member.offset)
-                        {
-                            let container_addr = base_addr + container_offset as u64;
+                        if let Some(bg) = bitfield_groups.get(&member.offset) {
+                            let container_addr = base_addr + bg.container_offset as u64;
                             let container_a2l_type =
-                                infer_a2l_type_from_encoding(container_size, type_info.encoding);
-                            let byte_in_container = member.offset.saturating_sub(container_offset);
+                                infer_a2l_type_from_encoding(bg.container_size, type_info.encoding);
+                            let byte_in_container =
+                                member.offset.saturating_sub(bg.container_offset);
                             let storage_bits = member.type_size * 8;
                             let raw_bo = member.bit_offset.unwrap_or(0);
                             let raw_bs = member.bit_size.unwrap_or(0);
@@ -395,7 +363,7 @@ impl ElfParser {
                             let mut entry = A2lEntry::new(
                                 member_full_name,
                                 container_addr,
-                                container_size,
+                                bg.container_size,
                                 container_a2l_type.to_string(),
                                 member.type_name.clone(),
                             )
@@ -488,8 +456,10 @@ impl ElfParser {
         visited.remove(&type_info.offset);
     }
 
-    fn compute_bitfield_groups(members: &[StructMember]) -> HashMap<usize, (usize, usize)> {
-        let mut groups: HashMap<usize, (usize, usize)> = HashMap::new();
+    fn compute_bitfield_groups(
+        members: &[crate::types::StructMember],
+    ) -> HashMap<usize, BitfieldGroup> {
+        let mut groups: HashMap<usize, BitfieldGroup> = HashMap::new();
         let mut i = 0;
         while i < members.len() {
             if members[i].is_bitfield() {
@@ -507,7 +477,13 @@ impl ElfParser {
                     .unwrap_or(0);
                 let container_size = max_end.saturating_sub(min_offset);
                 for member in group {
-                    groups.insert(member.offset, (min_offset, container_size));
+                    groups.insert(
+                        member.offset,
+                        BitfieldGroup {
+                            container_offset: min_offset,
+                            container_size,
+                        },
+                    );
                 }
             } else {
                 i += 1;

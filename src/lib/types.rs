@@ -4,14 +4,18 @@ use std::collections::HashMap;
 pub const MAX_ARRAY_EXPAND: usize = 1000;
 pub const MAX_NESTING_DEPTH: usize = 50;
 
+pub struct BitfieldGroup {
+    pub container_offset: usize,
+    pub container_size: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variable {
     pub name: String,
     pub address: u64,
     pub size: usize,
     pub type_name: String,
-    pub section: String,
-    pub type_info: Option<TypeInfo>,
+    pub type_info: TypeInfo,
 }
 
 impl Variable {
@@ -20,21 +24,15 @@ impl Variable {
         address: u64,
         size: usize,
         type_name: String,
-        section: String,
+        type_info: TypeInfo,
     ) -> Self {
         Self {
             name,
             address,
             size,
             type_name,
-            section,
-            type_info: None,
+            type_info,
         }
-    }
-
-    pub fn with_type_info(mut self, type_info: TypeInfo) -> Self {
-        self.type_info = Some(type_info);
-        self
     }
 }
 
@@ -256,14 +254,6 @@ impl StructMember {
     pub fn is_bitfield(&self) -> bool {
         self.bit_size.is_some()
     }
-
-    pub fn get_effective_bit_offset(
-        &self,
-        _endianness: Endianness,
-        _container_size_bits: usize,
-    ) -> Option<usize> {
-        Some(self.bit_offset?)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,10 +374,6 @@ impl A2lEntry {
 
     pub fn is_bitfield(&self) -> bool {
         self.bit_size.is_some()
-    }
-
-    pub fn get_effective_bit_offset(&self, _endianness: Endianness) -> Option<usize> {
-        Some(self.bit_offset?)
     }
 
     pub fn with_array_index(mut self, index: Vec<usize>) -> Self {

@@ -16,6 +16,7 @@ pub use data_package::{DataPackage, PackageMeta};
 pub use dwarf::{analyze_variables_with_dwarf, DwarfParser};
 pub use elf::{DwarfStats, ElfParser};
 pub use types::{
-    infer_a2l_type, infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, Endianness, EnumVariant,
-    StructMember, TypeEncoding, TypeInfo, TypeKind, Variable, MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
+    infer_a2l_type, infer_a2l_type_from_encoding, A2lEntry, A2lEntryStore, BitfieldGroup,
+    Endianness, EnumVariant, StructMember, TypeEncoding, TypeInfo, TypeKind, Variable,
+    MAX_ARRAY_EXPAND, MAX_NESTING_DEPTH,
 };

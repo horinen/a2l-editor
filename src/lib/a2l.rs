@@ -149,7 +149,6 @@ impl A2lGenerator {
             output.push_str(&Self::generate_measurement_block_with_compu(
                 entry,
                 None,
-                None,
                 Endianness::Little,
             ));
         }
@@ -184,7 +183,6 @@ impl A2lGenerator {
     pub fn generate_measurement_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
-        symbol_link: Option<&str>,
         endianness: Endianness,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
@@ -211,9 +209,10 @@ impl A2lGenerator {
         ));
 
         if entry.is_bitfield() {
-            let effective_offset = entry.get_effective_bit_offset(endianness).unwrap();
+            let effective_offset = entry.bit_offset.unwrap();
             let bit_size = entry.bit_size.unwrap();
-            let mask = Self::calculate_bit_mask(effective_offset, bit_size);
+            let mask =
+                Self::calculate_bit_mask(effective_offset, bit_size, entry.size * 8, endianness);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
         }
 
@@ -228,7 +227,7 @@ impl A2lGenerator {
                 sym_name, sym_offset
             ));
         } else {
-            let link = symbol_link.unwrap_or(&entry.full_name);
+            let link = &entry.full_name;
             output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
         }
         output.push_str("    /end MEASUREMENT\n\n");
@@ -239,7 +238,6 @@ impl A2lGenerator {
     fn generate_characteristic_block_with_compu(
         entry: &A2lEntry,
         compu_method: Option<&str>,
-        symbol_link: Option<&str>,
         endianness: Endianness,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
@@ -254,7 +252,6 @@ impl A2lGenerator {
         };
 
         let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
-        let link = symbol_link.unwrap_or(&entry.full_name);
         let mut output = String::new();
 
         output.push_str(&format!(
@@ -267,9 +264,10 @@ impl A2lGenerator {
         ));
 
         if entry.is_bitfield() {
-            let effective_offset = entry.get_effective_bit_offset(endianness).unwrap();
+            let effective_offset = entry.bit_offset.unwrap();
             let bit_size = entry.bit_size.unwrap();
-            let mask = Self::calculate_bit_mask(effective_offset, bit_size);
+            let mask =
+                Self::calculate_bit_mask(effective_offset, bit_size, entry.size * 8, endianness);
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
         }
 
@@ -282,7 +280,7 @@ impl A2lGenerator {
                 sym_name, sym_offset
             ));
         } else {
-            output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", link));
+            output.push_str(&format!("      SYMBOL_LINK \"{}\" 0\n", entry.full_name));
         }
         output.push_str("    /end CHARACTERISTIC\n\n");
 
@@ -367,8 +365,17 @@ impl A2lGenerator {
         }
     }
 
-    fn calculate_bit_mask(effective_bit_offset: usize, bit_size: usize) -> u64 {
-        ((1u64 << bit_size) - 1) << effective_bit_offset
+    fn calculate_bit_mask(
+        bit_offset: usize,
+        bit_size: usize,
+        container_size_bits: usize,
+        endianness: Endianness,
+    ) -> u64 {
+        let shift = match endianness {
+            Endianness::Little => bit_offset,
+            Endianness::Big => container_size_bits.saturating_sub(bit_offset + bit_size),
+        };
+        ((1u64 << bit_size) - 1) << shift
     }
 
     fn get_bitfield_max(bit_size: usize) -> u64 {
@@ -461,10 +468,10 @@ impl A2lGenerator {
             .iter()
             .map(|e| match kind {
                 ExportKind::Measurement => {
-                    Self::generate_measurement_block_with_compu(e, None, None, endianness)
+                    Self::generate_measurement_block_with_compu(e, None, endianness)
                 }
                 ExportKind::Characteristic => {
-                    Self::generate_characteristic_block_with_compu(e, None, None, endianness)
+                    Self::generate_characteristic_block_with_compu(e, None, endianness)
                 }
             })
             .collect();
@@ -1019,17 +1026,11 @@ impl A2lGenerator {
                                 .changes
                                 .as_ref()
                                 .and_then(|c| c.compu_method.as_deref());
-                            let symbol_link = edit
-                                .changes
-                                .as_ref()
-                                .and_then(|c| c.symbol_link.as_deref())
-                                .or_else(|| entry_info.symbol_link.as_deref());
                             let block = match kind {
                                 ExportKind::Measurement => {
                                     Self::generate_measurement_block_with_compu(
                                         &entry,
                                         compu_method,
-                                        symbol_link,
                                         endianness,
                                     )
                                 }
@@ -1037,7 +1038,6 @@ impl A2lGenerator {
                                     Self::generate_characteristic_block_with_compu(
                                         &entry,
                                         compu_method,
-                                        symbol_link,
                                         endianness,
                                     )
                                 }

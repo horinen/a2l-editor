@@ -245,38 +245,17 @@ fn cmd_parse(elf_path: &PathBuf) -> Result<()> {
     }
 
     let mut size_dist = std::collections::HashMap::new();
-    let mut section_dist = std::collections::HashMap::new();
-    let mut with_type_info = 0usize;
     for v in variables {
         *size_dist.entry(v.size).or_insert(0usize) += 1;
-        *section_dist.entry(v.section.clone()).or_insert(0usize) += 1;
-        if v.type_info.is_some() {
-            with_type_info += 1;
-        }
     }
 
     println!();
-    if with_type_info > 0 {
-        println!("含类型信息: {} / {}", with_type_info, variables.len());
-    }
 
     println!("按大小分布:");
     let mut sizes: Vec<_> = size_dist.iter().collect();
     sizes.sort_by_key(|(_, c)| std::cmp::Reverse(**c));
     for (size, count) in sizes.iter().take(10) {
         println!("  {} 字节: {} 个", size, count);
-    }
-
-    println!("按段分布:");
-    let mut sections: Vec<_> = section_dist.iter().collect();
-    sections.sort_by_key(|(_, c)| std::cmp::Reverse(**c));
-    for (section, count) in sections.iter().take(10) {
-        let name = if section.is_empty() {
-            "(未知)"
-        } else {
-            section
-        };
-        println!("  {}: {} 个", name, count);
     }
 
     println!();
@@ -309,7 +288,6 @@ fn cmd_entries(
         if show_a2l {
             let block = A2lGenerator::generate_measurement_block_with_compu(
                 entry,
-                None,
                 None,
                 Endianness::Little,
             );
