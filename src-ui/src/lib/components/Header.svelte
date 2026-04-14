@@ -4,58 +4,101 @@
   import { themes, themeNames, applyTheme, cycleTheme } from '$lib/themes';
   import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading } from '$lib/stores';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { loadElf, loadPackage, loadA2l, setEndianness, updateA2lAddresses } from '$lib/commands';
+  import { loadElf, loadPackage, loadA2l, setEndianness, updateA2lAddresses, searchElfEntries, searchA2lVariables } from '$lib/commands';
   import { 
     elfPath, elfFileName, elfTotalCount, elfEntries,
     packagePath, a2lVariables, a2lNames
   } from '$lib/stores';
-  import { searchA2lVariables } from '$lib/commands';
+  import {
+    getRecentElfFiles, addRecentElfFile, removeRecentElfFile, clearRecentElfFiles,
+    getRecentA2lFiles, addRecentA2lFile, removeRecentA2lFile, clearRecentA2lFiles,
+    getLastElfDir, getLastA2lDir
+  } from '$lib/recentFiles';
 
   import { getVersion } from '@tauri-apps/api/app';
 
   let showMenu = $state(false);
   let version = $state('');
+  let recentElfFiles = $state(getRecentElfFiles());
+  let recentA2lFiles = $state(getRecentA2lFiles());
 
   $effect(() => {
     getVersion().then(v => version = 'v' + v);
   });
 
+  async function loadElfFromPath(path: string) {
+    isLoading.set(true);
+    statusMessage.set('⏳ 正在加载...');
+    try {
+      const result = await loadElf(path);
+      elfPath.set(path);
+      elfFileName.set(result.meta.file_name);
+      elfTotalCount.set(result.entry_count);
+      packagePath.set(path + '.a2ldata');
+      
+      const entries = await searchElfEntries('', 0, 10000);
+      elfEntries.set(entries);
+      
+      const name = path.split('/').pop() || path;
+      recentElfFiles = addRecentElfFile(path, name);
+      statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+    } catch (e) {
+      statusMessage.set(`❌ 加载失败: ${e}`);
+      if (String(e).includes('数据包不存在')) {
+        elfPath.set(path);
+        elfFileName.set(path.split('/').pop() || '');
+        const name = path.split('/').pop() || path;
+        recentElfFiles = addRecentElfFile(path, name);
+        showGenerateDialog.set(true);
+      } else {
+        recentElfFiles = removeRecentElfFile(path);
+      }
+      throw e;
+    }
+    isLoading.set(false);
+  }
+
+  async function loadA2lFromPath(path: string) {
+    isLoading.set(true);
+    try {
+      const result = await loadA2l(path);
+      a2lPath.set(path);
+      a2lNames.set(new Set(result.existing_names));
+      
+      const vars = await searchA2lVariables('', 0, 10000);
+      a2lVariables.set(vars);
+      
+      const name = path.split('/').pop() || path;
+      recentA2lFiles = addRecentA2lFile(path, name);
+      statusMessage.set(`✅ 已加载目标 A2L (${result.variable_count} 个变量)`);
+    } catch (e) {
+      statusMessage.set(`❌ 加载 A2L 失败: ${e}`);
+      recentA2lFiles = removeRecentA2lFile(path);
+      throw e;
+    }
+    isLoading.set(false);
+  }
+
   async function handleOpenElf() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'ELF', extensions: ['elf', 'out', 'axf'] }]
+      filters: [{ name: 'ELF', extensions: ['elf', 'out', 'axf'] }],
+      defaultPath: getLastElfDir()
     });
     if (selected) {
-      isLoading.set(true);
-      statusMessage.set('⏳ 正在加载...');
       try {
-        const result = await loadElf(selected as string);
-        elfPath.set(selected as string);
-        elfFileName.set(result.meta.file_name);
-        elfTotalCount.set(result.entry_count);
-        packagePath.set((selected as string) + '.a2ldata');
-        
-        const entries = await (await import('$lib/commands')).searchElfEntries('', 0, 10000);
-        elfEntries.set(entries);
-        
-        statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
-      } catch (e) {
-        statusMessage.set(`❌ 加载失败: ${e}`);
-        if (String(e).includes('数据包不存在')) {
-          elfPath.set(selected as string);
-          elfFileName.set((selected as string).split('/').pop() || '');
-          showGenerateDialog.set(true);
-        }
-      }
-      isLoading.set(false);
+        await loadElfFromPath(selected as string);
+      } catch {}
     }
     showMenu = false;
   }
 
   async function handleOpenPackage() {
+    const defaultDir = $elfPath || undefined;
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'A2L Data', extensions: ['a2ldata'] }]
+      filters: [{ name: 'A2L Data', extensions: ['a2ldata'] }],
+      defaultPath: defaultDir
     });
     if (selected) {
       isLoading.set(true);
@@ -67,7 +110,7 @@
         elfFileName.set(result.meta.file_name);
         elfTotalCount.set(result.entry_count);
         
-        const entries = await (await import('$lib/commands')).searchElfEntries('', 0, 10000);
+        const entries = await searchElfEntries('', 0, 10000);
         elfEntries.set(entries);
         
         statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
@@ -82,23 +125,13 @@
   async function handleSelectA2l() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'A2L', extensions: ['a2l'] }]
+      filters: [{ name: 'A2L', extensions: ['a2l'] }],
+      defaultPath: getLastA2lDir()
     });
     if (selected) {
-      isLoading.set(true);
       try {
-        const result = await loadA2l(selected as string);
-        a2lPath.set(selected as string);
-        a2lNames.set(new Set(result.existing_names));
-        
-        const vars = await (await import('$lib/commands')).searchA2lVariables('', 0, 10000);
-        a2lVariables.set(vars);
-        
-        statusMessage.set(`✅ 已加载目标 A2L (${result.variable_count} 个变量)`);
-      } catch (e) {
-        statusMessage.set(`❌ 加载 A2L 失败: ${e}`);
-      }
-      isLoading.set(false);
+        await loadA2lFromPath(selected as string);
+      } catch {}
     }
     showMenu = false;
   }
@@ -140,6 +173,30 @@
     showMenu = false;
   }
 
+  async function handleRecentElf(path: string) {
+    try {
+      await loadElfFromPath(path);
+    } catch {}
+    showMenu = false;
+  }
+
+  async function handleRecentA2l(path: string) {
+    try {
+      await loadA2lFromPath(path);
+    } catch {}
+    showMenu = false;
+  }
+
+  function handleClearRecentElf() {
+    clearRecentElfFiles();
+    recentElfFiles = [];
+  }
+
+  function handleClearRecentA2l() {
+    clearRecentA2lFiles();
+    recentA2lFiles = [];
+  }
+
   function closeMenu() {
     showMenu = false;
   }
@@ -156,8 +213,32 @@
       {#if showMenu}
         <div class="menu" transition:fly={{ duration: 100, y: -5 }} onfocusout={closeMenu}>
           <button onclick={handleOpenElf}>📂 打开 ELF...</button>
+          {#if recentElfFiles.length > 0}
+            <div class="recent-section">
+              {#each recentElfFiles as file}
+                <button
+                  class="recent-item"
+                  title={file.path}
+                  onclick={(e) => { e.stopPropagation(); handleRecentElf(file.path); }}
+                >📂 {file.name}</button>
+              {/each}
+              <button class="recent-clear" onclick={(e) => { e.stopPropagation(); handleClearRecentElf(); }}>🗑️ 清除记录</button>
+            </div>
+          {/if}
           <button onclick={handleOpenPackage}>📦 打开数据包...</button>
           <button onclick={handleSelectA2l}>📄 选择目标 A2L...</button>
+          {#if recentA2lFiles.length > 0}
+            <div class="recent-section">
+              {#each recentA2lFiles as file}
+                <button
+                  class="recent-item"
+                  title={file.path}
+                  onclick={(e) => { e.stopPropagation(); handleRecentA2l(file.path); }}
+                >📄 {file.name}</button>
+              {/each}
+              <button class="recent-clear" onclick={(e) => { e.stopPropagation(); handleClearRecentA2l(); }}>🗑️ 清除记录</button>
+            </div>
+          {/if}
           <div class="divider"></div>
           <button onclick={handleUpdateAddresses}>🔄 更新 A2L 地址</button>
           <button onclick={() => { showGenerateDialog.set(true); showMenu = false; }}>🔄 重新生成缓存</button>
@@ -216,7 +297,7 @@
     top: 100%;
     left: 0;
     margin-top: 4px;
-    min-width: 180px;
+    min-width: 220px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -225,7 +306,7 @@
     z-index: 1000;
   }
 
-  .menu button {
+  .menu > button {
     display: block;
     width: 100%;
     padding: 8px 16px;
@@ -237,8 +318,51 @@
     font-size: 13px;
   }
 
-  .menu button:hover {
+  .menu > button:hover {
     background: var(--bg-hover);
+  }
+
+  .recent-section {
+    padding: 2px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .recent-item {
+    display: block;
+    width: 100%;
+    padding: 6px 16px 6px 24px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    text-align: left;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recent-item:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .recent-clear {
+    display: block;
+    width: 100%;
+    padding: 4px 16px 4px 24px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    text-align: left;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .recent-clear:hover {
+    background: var(--bg-hover);
+    color: var(--text);
   }
 
   .divider {

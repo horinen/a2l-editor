@@ -8,11 +8,15 @@ import {
   loadPackage, loadA2l, searchElfEntries, searchA2lVariables 
 } from './commands';
 
-export function setupAutoLoad() {
+export function setupAutoLoad(onAutoLoad?: () => void) {
   listen<{ package?: string; a2l?: string }>(
     'auto-load-files',
     async (event) => {
       const { package: pkg, a2l } = event.payload;
+      
+      if (pkg || a2l) {
+        onAutoLoad?.();
+      }
       
       if (pkg) {
         try {

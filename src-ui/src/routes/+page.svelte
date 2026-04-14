@@ -16,15 +16,81 @@
   import { setupAutoLoad, testLoadFiles } from '$lib/autoLoad';
   import { 
     elfSelectedIndices, a2lSelectedNames, a2lPath, elfEntries,
-    statusMessage, a2lVariables
+    statusMessage, a2lVariables, elfPath, elfFileName, elfTotalCount,
+    packagePath, a2lNames, isLoading
   } from '$lib/stores';
-  import { exportEntries, deleteVariables, searchA2lVariables } from '$lib/commands';
+  import { exportEntries, deleteVariables, searchA2lVariables, searchElfEntries, loadElf, loadA2l } from '$lib/commands';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { tick } from 'svelte';
+  import {
+    getRecentElfFiles, removeRecentElfFile, addRecentElfFile,
+    getRecentA2lFiles, removeRecentA2lFile, addRecentA2lFile
+  } from '$lib/recentFiles';
+
+  let autoLoaded = false;
 
   onMount(() => {
-    setupAutoLoad();
+    setupAutoLoad(() => { autoLoaded = true; });
     (window as any).__test_loadFiles__ = testLoadFiles;
+
+    setTimeout(async () => {
+      if (autoLoaded) return;
+
+      const recentElf = getRecentElfFiles();
+      const recentA2l = getRecentA2lFiles();
+
+      if (recentElf.length > 0) {
+        autoLoaded = true;
+        isLoading.set(true);
+        statusMessage.set('⏳ 正在恢复上次 ELF...');
+        try {
+          const path = recentElf[0].path;
+          const result = await loadElf(path);
+          elfPath.set(path);
+          elfFileName.set(result.meta.file_name);
+          elfTotalCount.set(result.entry_count);
+          packagePath.set(path + '.a2ldata');
+          const entries = await searchElfEntries('', 0, 10000);
+          elfEntries.set(entries);
+          statusMessage.set(`✅ 已恢复 ${result.entry_count} 个条目`);
+        } catch (e) {
+          if (String(e).includes('数据包不存在')) {
+            elfPath.set(recentElf[0].path);
+            elfFileName.set(recentElf[0].name);
+            packagePath.set(recentElf[0].path + '.a2ldata');
+            statusMessage.set('⚠️ 上次 ELF 的数据包不存在，请重新生成');
+          } else {
+            statusMessage.set(`⚠️ 上次 ELF 文件已不可用: ${e}`);
+            removeRecentElfFile(recentElf[0].path);
+          }
+        }
+      }
+
+      if (recentA2l.length > 0) {
+        autoLoaded = true;
+        isLoading.set(true);
+        statusMessage.update(prev => prev.includes('已恢复') ? prev : '⏳ 正在恢复上次 A2L...');
+        try {
+          const path = recentA2l[0].path;
+          const result = await loadA2l(path);
+          a2lPath.set(path);
+          a2lNames.set(new Set(result.existing_names));
+          const vars = await searchA2lVariables('', 0, 10000);
+          a2lVariables.set(vars);
+          statusMessage.update(prev => {
+            if (prev.includes('已恢复') && prev.includes('条目')) {
+              return prev + `，A2L (${result.variable_count} 个变量)`;
+            }
+            return `✅ 已恢复 A2L (${result.variable_count} 个变量)`;
+          });
+        } catch (e) {
+          statusMessage.set(`⚠️ 上次 A2L 文件已不可用: ${e}`);
+          removeRecentA2lFile(recentA2l[0].path);
+        }
+      }
+
+      isLoading.set(false);
+    }, 200);
   });
 
   let a2lPanelRef: A2lPanel | undefined;

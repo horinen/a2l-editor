@@ -3,11 +3,13 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { loadElf, loadPackage, loadA2l, searchElfEntries, searchA2lVariables } from '$lib/commands';
   import { elfEntries, a2lNames, statusMessage } from '$lib/stores';
+  import { addRecentElfFile, addRecentA2lFile, getLastElfDir, getLastA2lDir } from '$lib/recentFiles';
 
   async function handleImportElf() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'ELF', extensions: ['elf', 'out', 'axf'] }]
+      filters: [{ name: 'ELF', extensions: ['elf', 'out', 'axf'] }],
+      defaultPath: getLastElfDir()
     });
     if (selected) {
       isLoading.set(true);
@@ -20,13 +22,16 @@
         packagePath.set((selected as string) + '.a2ldata');
         const entries = await searchElfEntries('', 0, 10000);
         elfEntries.set(entries);
+        const name = (selected as string).split('/').pop() || '';
+        addRecentElfFile(selected as string, name);
         statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
       } catch (e) {
         statusMessage.set(`❌ 加载失败: ${e}`);
-        // 如果数据包不存在，设置 elfPath 并显示生成对话框
         if (String(e).includes('数据包不存在')) {
           elfPath.set(selected as string);
           elfFileName.set((selected as string).split('/').pop() || '');
+          const name = (selected as string).split('/').pop() || '';
+          addRecentElfFile(selected as string, name);
           showGenerateDialog.set(true);
         }
       }
@@ -35,9 +40,11 @@
   }
 
   async function handleImportPackage() {
+    const defaultDir = $elfPath || undefined;
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'A2L Data', extensions: ['a2ldata'] }]
+      filters: [{ name: 'A2L Data', extensions: ['a2ldata'] }],
+      defaultPath: defaultDir
     });
     if (selected) {
       isLoading.set(true);
@@ -60,7 +67,8 @@
   async function handleImportA2l() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'A2L', extensions: ['a2l'] }]
+      filters: [{ name: 'A2L', extensions: ['a2l'] }],
+      defaultPath: getLastA2lDir()
     });
     if (selected) {
       isLoading.set(true);
@@ -70,6 +78,8 @@
         a2lNames.set(new Set(result.existing_names));
         const vars = await searchA2lVariables('', 0, 10000);
         a2lVariables.set(vars);
+        const name = (selected as string).split('/').pop() || '';
+        addRecentA2lFile(selected as string, name);
         statusMessage.set(`✅ 已加载目标 A2L (${result.variable_count} 个变量)`);
       } catch (e) {
         statusMessage.set(`❌ 加载 A2L 失败: ${e}`);
