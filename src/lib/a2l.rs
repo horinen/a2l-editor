@@ -583,8 +583,10 @@ impl A2lGenerator {
                 }
 
                 if names_set.contains(var_name) {
-                    // 跳过这个块（删除）
                     i = block_end + 1;
+                    while i < lines.len() && lines[i].trim().is_empty() {
+                        i += 1;
+                    }
                     continue;
                 } else {
                     // 保留这个块
