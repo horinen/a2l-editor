@@ -289,6 +289,23 @@ pub fn get_elf_count(state: State<Mutex<AppState>>) -> Result<usize, String> {
 }
 
 #[tauri::command]
+pub fn search_elf_count(query: String, state: State<Mutex<AppState>>) -> Result<usize, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    let store = state.store.as_ref().ok_or("未加载 ELF 文件")?;
+    let count = if query.is_empty() {
+        store.entries.len()
+    } else {
+        let q = query.to_lowercase();
+        store
+            .entries
+            .iter()
+            .filter(|e| e.full_name.to_lowercase().contains(&q))
+            .count()
+    };
+    Ok(count)
+}
+
+#[tauri::command]
 pub fn search_a2l_variables(
     query: String,
     offset: usize,

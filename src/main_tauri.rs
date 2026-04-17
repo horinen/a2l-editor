@@ -59,6 +59,7 @@ fn main() {
             commands::load_a2l,
             commands::search_elf_entries,
             commands::get_elf_count,
+            commands::search_elf_count,
             commands::search_a2l_variables,
             commands::export_entries,
             commands::delete_variables,

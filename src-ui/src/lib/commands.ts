@@ -50,6 +50,10 @@ export async function getElfCount(): Promise<number> {
   return invoke('get_elf_count');
 }
 
+export async function searchElfCount(query: string): Promise<number> {
+  return invoke('search_elf_count', { query });
+}
+
 export async function searchA2lVariables(query: string, offset = 0, limit = 10000): Promise<A2lVariable[]> {
   return invoke('search_a2l_variables', { query, offset, limit });
 }

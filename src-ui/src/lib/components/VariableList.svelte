@@ -6,7 +6,7 @@
   import type { A2lEntry } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
   import { debounce } from '$lib/utils/debounce';
-  import { searchElfEntries, getElfCount } from '$lib/commands';
+  import { searchElfEntries, searchElfCount } from '$lib/commands';
   import VirtualList from './VirtualList.svelte';
 
   interface Props {
@@ -21,7 +21,13 @@
   let virtualListRef: VirtualList<A2lEntry>;
   let localLoading = $state(false);
   
-  let filteredCount = $derived($elfTotalCount);
+  let filteredCount = $state($elfTotalCount);
+
+  $effect(() => {
+    if (!searchQuery) {
+      filteredCount = $elfTotalCount;
+    }
+  });
   
   const ROW_HEIGHT = 32;
   const BUFFER_SIZE = 50;
@@ -85,7 +91,7 @@
       const sortConfig = getPrimarySortConfig($elfSortConfigs);
       const entries = await searchElfEntries(query, 0, 10000, sortConfig.field, sortConfig.order);
       elfEntries.set(entries);
-      filteredCount = await getElfCount();
+      filteredCount = await searchElfCount(query);
     } catch (e) {
       console.error('加载数据失败:', e);
     }
@@ -360,6 +366,7 @@
 
   .list {
     flex: 1;
+    min-height: 0;
     overflow: hidden;
     position: relative;
   }
