@@ -4,9 +4,23 @@ use a2l_editor::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
+
+fn read_a2l_file(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(err) => {
+            eprintln!(
+                "警告: A2L 文件包含非 UTF-8 字节，已使用容错解码: {}",
+                path.display()
+            );
+            Ok(String::from_utf8_lossy(err.as_bytes()).into_owned())
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct AppState {
@@ -211,8 +225,7 @@ pub fn generate_package(
 #[tauri::command]
 pub fn load_a2l(path: String, state: State<Mutex<AppState>>) -> Result<A2lLoadResult, String> {
     let a2l_path = PathBuf::from(&path);
-    let content =
-        std::fs::read_to_string(&a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+    let content = read_a2l_file(&a2l_path)?;
 
     let variables = A2lParser::parse_all_variables(&content);
     let existing_names: Vec<String> = variables.iter().map(|v| v.name.clone()).collect();
@@ -377,8 +390,7 @@ pub fn export_entries(
         .map_err(|e| format!("导出失败: {}", e))?;
 
     // 重新加载 A2L
-    let content =
-        std::fs::read_to_string(&a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?;
+    let content = read_a2l_file(&a2l_path)?;
     let variables = A2lParser::parse_all_variables(&content);
     state.a2l_variables = variables;
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
@@ -403,8 +415,7 @@ pub fn delete_variables(
         return Err("没有选中任何变量".to_string());
     }
 
-    let content =
-        std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+    let content = read_a2l_file(a2l_path)?;
     let new_content = A2lGenerator::remove_variables(&content, &names)
         .map_err(|e| format!("删除变量失败: {}", e))?;
 
@@ -413,8 +424,7 @@ pub fn delete_variables(
     let deleted_count = names.len();
 
     // 重新加载 A2L
-    let content =
-        std::fs::read_to_string(a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?;
+    let content = read_a2l_file(a2l_path)?;
     let variables = A2lParser::parse_all_variables(&content);
     state.a2l_variables = variables;
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
@@ -494,8 +504,7 @@ pub fn save_a2l_changes(
         })
         .collect();
 
-    let content =
-        std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+    let content = read_a2l_file(a2l_path)?;
 
     let endianness = if state.endianness == "big" {
         Endianness::Big
@@ -508,9 +517,7 @@ pub fn save_a2l_changes(
 
     std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
 
-    let variables = A2lParser::parse_all_variables(
-        &std::fs::read_to_string(a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?,
-    );
+    let variables = A2lParser::parse_all_variables(&read_a2l_file(a2l_path)?);
     state.a2l_variables = variables;
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
 
@@ -582,8 +589,7 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
         });
     }
 
-    let content =
-        std::fs::read_to_string(a2l_path).map_err(|e| format!("读取 A2L 文件失败: {}", e))?;
+    let content = read_a2l_file(a2l_path)?;
 
     let endianness = if state.endianness == "big" {
         Endianness::Big
@@ -595,9 +601,7 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
 
     std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
 
-    let variables = A2lParser::parse_all_variables(
-        &std::fs::read_to_string(a2l_path).map_err(|e| format!("重新读取 A2L 失败: {}", e))?,
-    );
+    let variables = A2lParser::parse_all_variables(&read_a2l_file(a2l_path)?);
     state.a2l_variables = variables;
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
 
