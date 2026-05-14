@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
 
+fn read_file_lossy(path: &std::path::Path) -> Result<String> {
+    let bytes = std::fs::read(path).with_context(|| format!("无法读取文件: {}", path.display()))?;
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(err) => {
+            eprintln!(
+                "警告: 文件包含非 UTF-8 字节，已使用容错解码: {}",
+                path.display()
+            );
+            Ok(String::from_utf8_lossy(err.as_bytes()).into_owned())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariableChanges {
     pub name: Option<String>,
@@ -455,8 +469,7 @@ impl A2lGenerator {
         kind: ExportKind,
         endianness: Endianness,
     ) -> Result<AppendResult> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("无法读取文件: {}", path.display()))?;
+        let content = read_file_lossy(path)?;
 
         let existing_names = Self::parse_existing_names(&content);
 
@@ -520,8 +533,7 @@ impl A2lGenerator {
     }
 
     pub fn preview_append(entries: &[A2lEntry], path: &std::path::Path) -> Result<AppendResult> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("无法读取文件: {}", path.display()))?;
+        let content = read_file_lossy(path)?;
 
         let existing_names = Self::parse_existing_names(&content);
 
