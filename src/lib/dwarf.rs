@@ -1,10 +1,10 @@
 use crate::types::{EnumVariant, StructMember, TypeEncoding, TypeInfo, TypeKind, Variable};
 use anyhow::{Context, Result};
-use gimli::{EndianSlice, LittleEndian};
+use gimli::{EndianSlice, RunTimeEndian};
 use object::{Object, ObjectSection};
 use std::collections::{HashMap, HashSet};
 
-type DwarfReader = EndianSlice<'static, LittleEndian>;
+type DwarfReader = EndianSlice<'static, RunTimeEndian>;
 
 #[derive(Debug, Clone)]
 pub struct DwarfVariable {
@@ -94,6 +94,8 @@ pub struct DwarfParser {
     array_elem_offsets: HashMap<u64, u64>,
     type_refs: HashMap<u64, u64>,
     stats: DwarfStats,
+    big_endian: bool,
+    debug_str: Option<&'static [u8]>,
 }
 
 #[derive(Default, Clone)]
@@ -120,6 +122,8 @@ impl DwarfParser {
             array_elem_offsets: HashMap::new(),
             type_refs: HashMap::new(),
             stats: DwarfStats::default(),
+            big_endian: false,
+            debug_str: None,
         }
     }
 
@@ -127,6 +131,8 @@ impl DwarfParser {
         let mut parser = Self::new();
 
         let obj = object::File::parse(elf_data).context("无法解析 ELF 文件")?;
+
+        parser.big_endian = !obj.is_little_endian();
 
         let debug_info = obj.section_by_name(".debug_info");
         let debug_abbrev = obj.section_by_name(".debug_abbrev");
@@ -138,11 +144,19 @@ impl DwarfParser {
         let debug_info_data = Self::get_section_bytes(&debug_info.unwrap());
         let debug_abbrev_data = Self::get_section_bytes(&debug_abbrev.unwrap());
 
+        parser.debug_str = obj
+            .section_by_name(".debug_str")
+            .map(|s| Self::get_section_bytes(&s));
+
         if debug_info_data.is_empty() || debug_abbrev_data.is_empty() {
             return Ok(parser);
         }
 
-        let endian = LittleEndian;
+        let endian = if obj.is_little_endian() {
+            RunTimeEndian::Little
+        } else {
+            RunTimeEndian::Big
+        };
         let debug_info: DwarfReader = EndianSlice::new(debug_info_data, endian);
         let debug_abbrev: DwarfReader = EndianSlice::new(debug_abbrev_data, endian);
 
@@ -511,7 +525,7 @@ impl DwarfParser {
                     self.stats.enum_values += 1;
                     if let Some(parent) = composite_stack.last_mut() {
                         if parent.kind == TypeKind::Enum {
-                            if let Some(name) = Self::get_name_static(entry) {
+                            if let Some(name) = self.get_name(entry) {
                                 if let Some(value) = Self::get_enum_value(entry) {
                                     parent.variants.push(EnumVariant::new(name, value));
                                 }
@@ -545,7 +559,7 @@ impl DwarfParser {
         builder: &mut CompositeBuilder,
         unit_offset: usize,
     ) {
-        builder.name = Self::get_name_static(entry);
+        builder.name = self.get_name(entry);
         builder.size = Self::get_size_static(entry);
         if builder.kind == TypeKind::Enum {
             builder.encoding = Self::get_encoding_static(entry);
@@ -563,7 +577,7 @@ impl DwarfParser {
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         unit_offset: usize,
     ) -> Option<StructMember> {
-        let name = Self::get_name_static(entry).unwrap_or_else(|| "_".to_string());
+        let name = self.get_name(entry).unwrap_or_else(|| "_".to_string());
         let offset = Self::get_member_location_static(entry);
         let size = Self::get_size_static(entry);
         let (type_offset, is_unit_ref) = Self::get_type_offset_info_static(entry);
@@ -626,7 +640,7 @@ impl DwarfParser {
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         global_offset: usize,
     ) {
-        let name = Self::get_name_static(entry);
+        let name = self.get_name(entry);
         let size = Self::get_size_static(entry);
         let encoding = Self::get_encoding_static(entry);
 
@@ -669,7 +683,12 @@ impl DwarfParser {
                 gimli::AttributeValue::Data2(v) => return Some(v as usize + 1),
                 gimli::AttributeValue::Data4(v) => return Some(v as usize + 1),
                 gimli::AttributeValue::Data8(v) => return Some(v as usize + 1),
-                gimli::AttributeValue::Sdata(v) => return Some((v as usize) + 1),
+                gimli::AttributeValue::Sdata(v) => {
+                    if v >= 0 {
+                        return Some(v as usize + 1);
+                    }
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -681,7 +700,12 @@ impl DwarfParser {
                 gimli::AttributeValue::Data2(v) => return Some(v as usize),
                 gimli::AttributeValue::Data4(v) => return Some(v as usize),
                 gimli::AttributeValue::Data8(v) => return Some(v as usize),
-                gimli::AttributeValue::Sdata(v) => return Some(v as usize),
+                gimli::AttributeValue::Sdata(v) => {
+                    if v >= 0 {
+                        return Some(v as usize);
+                    }
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -713,7 +737,7 @@ impl DwarfParser {
         global_offset: usize,
         unit_offset: usize,
     ) {
-        let name = Self::get_name_static(entry);
+        let name = self.get_name(entry);
         let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         if let Some(type_name) = name {
@@ -737,7 +761,7 @@ impl DwarfParser {
         global_offset: usize,
         unit_offset: usize,
     ) {
-        let name = Self::get_name_static(entry);
+        let name = self.get_name(entry);
         let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         let type_name = name.unwrap_or_else(|| "const".to_string());
@@ -758,7 +782,7 @@ impl DwarfParser {
         global_offset: usize,
         unit_offset: usize,
     ) {
-        let name = Self::get_name_static(entry);
+        let name = self.get_name(entry);
         let target_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
         let type_name = name.unwrap_or_else(|| "volatile".to_string());
@@ -780,10 +804,10 @@ impl DwarfParser {
     ) {
         self.stats.variables += 1;
 
-        if let Some(name) = Self::get_name_static(entry) {
+        if let Some(name) = self.get_name(entry) {
             let type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
-            if let Some(address) = Self::parse_location_static(entry) {
+            if let Some(address) = self.parse_location(entry) {
                 self.global_variables.push(DwarfVariable {
                     name: name.clone(),
                     address,
@@ -797,7 +821,7 @@ impl DwarfParser {
         }
     }
 
-    fn parse_location_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<u64> {
+    fn parse_location(&self, entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<u64> {
         let attr = entry
             .attr(gimli::constants::DW_AT_location)
             .ok()
@@ -805,34 +829,60 @@ impl DwarfParser {
 
         let value = attr.value();
         match &value {
-            gimli::AttributeValue::Exprloc(expr) => Self::parse_dw_op_addr(expr.0.as_ref()),
-            gimli::AttributeValue::Block(block) => Self::parse_dw_op_addr(block.as_ref()),
+            gimli::AttributeValue::Exprloc(expr) => self.parse_dw_op_addr(expr.0.as_ref()),
+            gimli::AttributeValue::Block(block) => self.parse_dw_op_addr(block.as_ref()),
             _ => None,
         }
     }
 
-    fn parse_dw_op_addr(data: &[u8]) -> Option<u64> {
+    fn parse_dw_op_addr(&self, data: &[u8]) -> Option<u64> {
         if data.is_empty() || data[0] != 0x03 {
             return None;
         }
 
         match data.len() {
-            5 => Some(
-                data[1] as u64
-                    | ((data[2] as u64) << 8)
-                    | ((data[3] as u64) << 16)
-                    | ((data[4] as u64) << 24),
-            ),
-            9 => Some(
-                data[1] as u64
-                    | ((data[2] as u64) << 8)
-                    | ((data[3] as u64) << 16)
-                    | ((data[4] as u64) << 24)
-                    | ((data[5] as u64) << 32)
-                    | ((data[6] as u64) << 40)
-                    | ((data[7] as u64) << 48)
-                    | ((data[8] as u64) << 56),
-            ),
+            5 => {
+                if self.big_endian {
+                    Some(
+                        ((data[1] as u64) << 24)
+                            | ((data[2] as u64) << 16)
+                            | ((data[3] as u64) << 8)
+                            | data[4] as u64,
+                    )
+                } else {
+                    Some(
+                        data[1] as u64
+                            | ((data[2] as u64) << 8)
+                            | ((data[3] as u64) << 16)
+                            | ((data[4] as u64) << 24),
+                    )
+                }
+            }
+            9 => {
+                if self.big_endian {
+                    Some(
+                        ((data[1] as u64) << 56)
+                            | ((data[2] as u64) << 48)
+                            | ((data[3] as u64) << 40)
+                            | ((data[4] as u64) << 32)
+                            | ((data[5] as u64) << 24)
+                            | ((data[6] as u64) << 16)
+                            | ((data[7] as u64) << 8)
+                            | data[8] as u64,
+                    )
+                } else {
+                    Some(
+                        data[1] as u64
+                            | ((data[2] as u64) << 8)
+                            | ((data[3] as u64) << 16)
+                            | ((data[4] as u64) << 24)
+                            | ((data[5] as u64) << 32)
+                            | ((data[6] as u64) << 40)
+                            | ((data[7] as u64) << 48)
+                            | ((data[8] as u64) << 56),
+                    )
+                }
+            }
             _ => None,
         }
     }
@@ -857,15 +907,28 @@ impl DwarfParser {
         self.type_cache.len()
     }
 
-    fn get_name_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<String> {
+    fn get_name(&self, entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<String> {
         entry
             .attr(gimli::constants::DW_AT_name)
             .ok()
             .flatten()
             .and_then(|attr| match attr.value() {
                 gimli::AttributeValue::String(s) => Some(String::from_utf8_lossy(&s).to_string()),
+                gimli::AttributeValue::DebugStrRef(offset) => {
+                    self.read_debug_str(offset.0 as usize)
+                }
                 _ => None,
             })
+    }
+
+    fn read_debug_str(&self, offset: usize) -> Option<String> {
+        let data = self.debug_str?;
+        if offset >= data.len() {
+            return None;
+        }
+        let slice = &data[offset..];
+        let end = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+        Some(String::from_utf8_lossy(&slice[..end]).to_string())
     }
 
     fn get_size_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> usize {
@@ -1064,7 +1127,7 @@ impl DwarfParser {
     }
 
     pub fn has_dwarf_info(&self) -> bool {
-        !self.struct_map.is_empty()
+        !self.type_cache.is_empty() || !self.global_variables.is_empty()
     }
 
     pub fn type_cache(&self) -> &HashMap<u64, TypeInfo> {
