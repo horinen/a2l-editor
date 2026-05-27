@@ -9,6 +9,61 @@ export interface SortConfig {
   order: SortOrder;
 }
 
+export type SortMode = 'lexicographic' | 'natural';
+
+export function matchQuery(name: string, query: string): boolean {
+  const nameLower = name.toLowerCase();
+  let q = query;
+  let starts = false;
+  let ends = false;
+
+  if (q.startsWith('^')) {
+    starts = true;
+    q = q.slice(1);
+  }
+  if (q.endsWith('$')) {
+    ends = true;
+    q = q.slice(0, -1);
+  }
+
+  const qLower = q.toLowerCase();
+
+  if (starts && ends) return nameLower === qLower;
+  if (starts) return nameLower.startsWith(qLower);
+  if (ends) return nameLower.endsWith(qLower);
+  return nameLower.includes(qLower);
+}
+
+export function naturalCompare(a: string, b: string): number {
+  let ia = 0;
+  let ib = 0;
+
+  while (ia < a.length && ib < b.length) {
+    const ca = a[ia];
+    const cb = b[ib];
+
+    if (ca >= '0' && ca <= '9' && cb >= '0' && cb <= '9') {
+      let na = 0;
+      while (ia < a.length && a[ia] >= '0' && a[ia] <= '9') {
+        na = na * 10 + (a.charCodeAt(ia) - 48);
+        ia++;
+      }
+      let nb = 0;
+      while (ib < b.length && b[ib] >= '0' && b[ib] <= '9') {
+        nb = nb * 10 + (b.charCodeAt(ib) - 48);
+        ib++;
+      }
+      if (na !== nb) return na - nb;
+    } else {
+      if (ca !== cb) return ca < cb ? -1 : 1;
+      ia++;
+      ib++;
+    }
+  }
+
+  return (a.length - ia) - (b.length - ib);
+}
+
 // ELF 变量 (右侧面板)
 export const elfEntries = writable<A2lEntry[]>([]);
 export const elfFilteredCount = writable<number>(0);
@@ -17,6 +72,7 @@ export const elfSearchQuery = writable<string>('');
 export const elfSelectedIndices = writable<Set<number>>(new Set());
 export const lastElfSelectedDisplayPos = writable<number | null>(null);
 export const elfSortConfigs = writable<SortConfig[]>([{ field: 'name', order: 'asc' }]);
+export const elfSortMode = writable<SortMode>('lexicographic');
 
 // A2L 变量 (左侧面板)
 export const a2lVariables = writable<A2lVariable[]>([]);
@@ -24,6 +80,7 @@ export const a2lSearchQuery = writable<string>('');
 export const a2lSelectedNames = writable<Set<string>>(new Set());
 export const lastA2lSelectedName = writable<string | null>(null);
 export const a2lSortConfigs = writable<SortConfig[]>([{ field: 'name', order: 'asc' }]);
+export const a2lSortMode = writable<SortMode>('lexicographic');
 
 // 文件状态
 export const elfPath = writable<string | null>(null);
@@ -198,7 +255,8 @@ export function toggleSort(configs: SortConfig[], field: SortField, shiftKey: bo
 export function applySorting<T>(
   items: T[], 
   configs: SortConfig[], 
-  getFieldValue: (item: T, field: SortField) => string | number
+  getFieldValue: (item: T, field: SortField) => string | number,
+  sortMode: SortMode = 'lexicographic'
 ): T[] {
   if (configs.length === 0) return items;
   
@@ -209,7 +267,11 @@ export function applySorting<T>(
       
       let comparison = 0;
       if (typeof valueA === 'string' && typeof valueB === 'string') {
-        comparison = valueA.localeCompare(valueB);
+        if (sortMode === 'natural') {
+          comparison = naturalCompare(valueA, valueB);
+        } else {
+          comparison = valueA.localeCompare(valueB);
+        }
       } else {
         comparison = (valueA as number) - (valueB as number);
       }

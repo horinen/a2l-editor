@@ -1,7 +1,7 @@
 <script lang="ts">
   import { 
     a2lVariables, a2lSearchQuery, a2lSelectedNames, toggleA2lSelection,
-    a2lSortConfigs, toggleSort, applySorting, parseAddress
+    a2lSortConfigs, toggleSort, applySorting, parseAddress, a2lSortMode, matchQuery
   } from '$lib/stores';
   import type { A2lVariable, ExcelImportResult } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
@@ -123,15 +123,14 @@
   }
   
   let displayVars = $derived.by(() => {
-    const query = $a2lSearchQuery.toLowerCase();
+    const query = $a2lSearchQuery;
     let filtered = $a2lVariables;
     
     if (query) {
-      filtered = filtered.filter((v: A2lVariable) => v.name.toLowerCase().includes(query));
+      filtered = filtered.filter((v: A2lVariable) => matchQuery(v.name, query));
     }
     
-    // 应用排序
-    return applySorting(filtered, $a2lSortConfigs, getA2lFieldValue);
+    return applySorting(filtered, $a2lSortConfigs, getA2lFieldValue, $a2lSortMode);
   });
 
   // 暴露给父组件的方法：滚动到指定变量
@@ -159,6 +158,10 @@
   function clearSearch() {
     searchQuery = '';
     a2lSearchQuery.set('');
+  }
+
+  function toggleSortMode() {
+    a2lSortMode.update(m => m === 'lexicographic' ? 'natural' : 'lexicographic');
   }
 
   function handleClick(e: MouseEvent, name: string) {
@@ -285,6 +288,7 @@
     {#if searchQuery}
       <button class="clear-btn" onclick={clearSearch}>✖</button>
     {/if}
+    <button class="sort-mode-btn" onclick={toggleSortMode} title={$a2lSortMode === 'natural' ? '自然序 (点击切换字典序)' : '字典序 (点击切换自然序)'}>{$a2lSortMode === 'natural' ? '1a' : 'Aa'}</button>
     <button class="icon-btn import-btn" onclick={() => showImportDialog = true} title="从 Excel 导入">📥</button>
     <button class="icon-btn template-btn" onclick={exportTemplate} title="导出 Excel 模板">📤</button>
     <button class="add-btn" onclick={() => showAddDialog = true} title="手动添加变量">➕</button>
@@ -434,6 +438,24 @@
     background: var(--accent);
     border-color: var(--accent);
     color: white;
+  }
+
+  .sort-mode-btn {
+    padding: 4px 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: monospace;
+    transition: all 0.2s;
+    user-select: none;
+  }
+
+  .sort-mode-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .table-header {

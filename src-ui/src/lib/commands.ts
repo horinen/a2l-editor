@@ -35,14 +35,16 @@ export async function searchElfEntries(
   offset = 0, 
   limit = 10000,
   sortField: 'name' | 'address' = 'name',
-  sortOrder: 'asc' | 'desc' = 'asc'
+  sortOrder: 'asc' | 'desc' = 'asc',
+  naturalSort = false
 ): Promise<A2lEntry[]> {
   return invoke('search_elf_entries', { 
     query, 
     offset, 
     limit,
     sortField,
-    sortOrder
+    sortOrder,
+    naturalSort
   });
 }
 

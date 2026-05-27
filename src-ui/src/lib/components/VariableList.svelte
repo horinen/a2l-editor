@@ -1,7 +1,7 @@
 <script lang="ts">
   import { 
     elfEntries, elfTotalCount, elfSearchQuery, elfSelectedIndices, a2lNames, 
-    toggleElfSelection, isLoading, elfSortConfigs, toggleSort
+    toggleElfSelection, isLoading, elfSortConfigs, toggleSort, elfSortMode
   } from '$lib/stores';
   import type { A2lEntry } from '$lib/types';
   import type { SortField, SortConfig } from '$lib/stores';
@@ -89,7 +89,7 @@
     localLoading = true;
     try {
       const sortConfig = getPrimarySortConfig($elfSortConfigs);
-      const entries = await searchElfEntries(query, 0, 10000, sortConfig.field, sortConfig.order);
+      const entries = await searchElfEntries(query, 0, 10000, sortConfig.field, sortConfig.order, $elfSortMode === 'natural');
       elfEntries.set(entries);
       filteredCount = await searchElfCount(query);
     } catch (e) {
@@ -137,6 +137,11 @@
     searchQuery = '';
     elfSearchQuery.set('');
     loadData('');
+  }
+
+  function toggleSortMode() {
+    elfSortMode.update(m => m === 'lexicographic' ? 'natural' : 'lexicographic');
+    loadData(searchQuery);
   }
 
   function handleClick(e: MouseEvent, entry: A2lEntry, displayIndex: number) {
@@ -224,6 +229,7 @@
     {#if searchQuery}
       <button class="clear-btn" onclick={clearSearch}>✖</button>
     {/if}
+    <button class="sort-mode-btn" onclick={toggleSortMode} title={$elfSortMode === 'natural' ? '自然序 (点击切换字典序)' : '字典序 (点击切换自然序)'}>{$elfSortMode === 'natural' ? '1a' : 'Aa'}</button>
   </div>
 
   <div class="table-header">
@@ -337,6 +343,24 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
+  }
+
+  .sort-mode-btn {
+    padding: 4px 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: monospace;
+    transition: all 0.2s;
+    user-select: none;
+  }
+
+  .sort-mode-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .table-header {

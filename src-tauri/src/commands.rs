@@ -22,6 +22,72 @@ fn read_a2l_file(path: &Path) -> Result<String, String> {
     }
 }
 
+fn parse_query_anchors(query: &str) -> (&str, bool, bool) {
+    let mut starts = false;
+    let mut ends = false;
+    let mut q = query;
+    if q.starts_with('^') {
+        starts = true;
+        q = &q[1..];
+    }
+    if q.ends_with('$') {
+        ends = true;
+        q = &q[..q.len().saturating_sub(1)];
+    }
+    (q, starts, ends)
+}
+
+fn match_name(name_lower: &str, q: &str, starts: bool, ends: bool) -> bool {
+    if q.is_empty() {
+        return true;
+    }
+    if starts && ends {
+        name_lower == q
+    } else if starts {
+        name_lower.starts_with(q)
+    } else if ends {
+        name_lower.ends_with(q)
+    } else {
+        name_lower.contains(q)
+    }
+}
+
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    let mut ia = 0;
+    let mut ib = 0;
+    while ia < a_bytes.len() && ib < b_bytes.len() {
+        let ca = a_bytes[ia];
+        let cb = b_bytes[ib];
+        if ca.is_ascii_digit() && cb.is_ascii_digit() {
+            let mut na: u64 = 0;
+            while ia < a_bytes.len() && a_bytes[ia].is_ascii_digit() {
+                na = na * 10 + (a_bytes[ia] - b'0') as u64;
+                ia += 1;
+            }
+            let mut nb: u64 = 0;
+            while ib < b_bytes.len() && b_bytes[ib].is_ascii_digit() {
+                nb = nb * 10 + (b_bytes[ib] - b'0') as u64;
+                ib += 1;
+            }
+            match na.cmp(&nb) {
+                Ordering::Equal => continue,
+                other => return other,
+            }
+        } else {
+            match ca.cmp(&cb) {
+                Ordering::Equal => {}
+                other => return other,
+            }
+            ia += 1;
+            ib += 1;
+        }
+    }
+    (a_bytes.len() - ia).cmp(&(b_bytes.len() - ib))
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub store: Option<A2lEntryStore>,
@@ -252,6 +318,7 @@ pub fn search_elf_entries(
     limit: usize,
     sort_field: Option<String>,
     sort_order: Option<String>,
+    natural_sort: Option<bool>,
     state: State<Mutex<AppState>>,
 ) -> Result<Vec<EntryInfo>, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
@@ -259,24 +326,33 @@ pub fn search_elf_entries(
 
     let field = sort_field.as_deref().unwrap_or("name");
     let order = sort_order.as_deref().unwrap_or("asc");
+    let use_natural = natural_sort.unwrap_or(false);
 
-    let mut entries: Vec<(usize, &A2lEntry)> = if query.is_empty() {
+    let (q, starts, ends) = parse_query_anchors(&query);
+    let q_lower = q.to_lowercase();
+
+    let mut entries: Vec<(usize, &A2lEntry)> = if q.is_empty() {
         store.entries.iter().enumerate().collect()
     } else {
-        let q = query.to_lowercase();
         store
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.full_name.to_lowercase().contains(&q))
+            .filter(|(_, e)| {
+                let name_lower = e.full_name.to_lowercase();
+                match_name(&name_lower, &q_lower, starts, ends)
+            })
             .collect()
     };
 
-    // 排序
     entries.sort_by(|a, b| {
         let cmp = match field {
             "address" => a.1.address.cmp(&b.1.address),
-            _ => a.1.full_name.cmp(&b.1.full_name),
+            _ => if use_natural {
+                natural_cmp(&a.1.full_name, &b.1.full_name)
+            } else {
+                a.1.full_name.cmp(&b.1.full_name)
+            },
         };
         if order == "desc" {
             cmp.reverse()
@@ -305,14 +381,18 @@ pub fn get_elf_count(state: State<Mutex<AppState>>) -> Result<usize, String> {
 pub fn search_elf_count(query: String, state: State<Mutex<AppState>>) -> Result<usize, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
     let store = state.store.as_ref().ok_or("未加载 ELF 文件")?;
-    let count = if query.is_empty() {
+    let (q, starts, ends) = parse_query_anchors(&query);
+    let count = if q.is_empty() {
         store.entries.len()
     } else {
-        let q = query.to_lowercase();
+        let q_lower = q.to_lowercase();
         store
             .entries
             .iter()
-            .filter(|e| e.full_name.to_lowercase().contains(&q))
+            .filter(|e| {
+                let name_lower = e.full_name.to_lowercase();
+                match_name(&name_lower, &q_lower, starts, ends)
+            })
             .count()
     };
     Ok(count)
@@ -326,8 +406,9 @@ pub fn search_a2l_variables(
     state: State<Mutex<AppState>>,
 ) -> Result<Vec<VariableInfo>, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
+    let (q, starts, ends) = parse_query_anchors(&query);
 
-    let variables: Vec<VariableInfo> = if query.is_empty() {
+    let variables: Vec<VariableInfo> = if q.is_empty() {
         state
             .a2l_variables
             .iter()
@@ -336,11 +417,14 @@ pub fn search_a2l_variables(
             .map(VariableInfo::from)
             .collect()
     } else {
-        let q = query.to_lowercase();
+        let q_lower = q.to_lowercase();
         state
             .a2l_variables
             .iter()
-            .filter(|v| v.name.to_lowercase().contains(&q))
+            .filter(|v| {
+                let name_lower = v.name.to_lowercase();
+                match_name(&name_lower, &q_lower, starts, ends)
+            })
             .skip(offset)
             .take(limit)
             .map(VariableInfo::from)
