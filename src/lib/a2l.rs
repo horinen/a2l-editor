@@ -1024,6 +1024,7 @@ impl A2lGenerator {
                                 type_name: entry_info.type_name.clone(),
                                 bit_offset: entry_info.bit_offset,
                                 bit_size: entry_info.bit_size,
+                                bit_offset_is_absolute: false,
                                 array_index: None,
                                 symbol_link_name: entry_info.symbol_link.clone(),
                                 symbol_link_offset: entry_info.symbol_link.as_ref().and_then(|s| {

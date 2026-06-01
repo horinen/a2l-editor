@@ -369,8 +369,21 @@ impl ElfParser {
         let container_addr = base_addr + bg.container_offset as u64;
         let container_a2l_type =
             infer_a2l_type_from_encoding(bg.container_size, Default::default());
-        let bit_offset = member.bit_offset.unwrap_or(0);
-        let bit_size = member.bit_size.unwrap_or(0);
+        let raw_bo = member.bit_offset.unwrap_or(0);
+        let raw_bs = member.bit_size.unwrap_or(0);
+        let storage_bits = if member.type_size > 0 {
+            member.type_size * 8
+        } else {
+            bg.container_size * 8
+        };
+        let bit_offset = if member.bit_offset_is_absolute
+            || raw_bo + raw_bs > storage_bits
+        {
+            raw_bo
+        } else {
+            member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs)
+        };
+        let bit_size = raw_bs;
         let symbol_link_offset = container_addr.saturating_sub(ctx.root_addr);
 
         ctx.store.add(

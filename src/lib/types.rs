@@ -225,6 +225,7 @@ pub struct StructMember {
     pub type_offset: Option<u64>,
     pub bit_offset: Option<usize>,
     pub bit_size: Option<usize>,
+    pub bit_offset_is_absolute: bool,
 }
 
 impl StructMember {
@@ -237,6 +238,7 @@ impl StructMember {
             type_offset: None,
             bit_offset: None,
             bit_size: None,
+            bit_offset_is_absolute: false,
         }
     }
 
@@ -245,9 +247,10 @@ impl StructMember {
         self
     }
 
-    pub fn with_bitfield(mut self, bit_offset: usize, bit_size: usize) -> Self {
+    pub fn with_bitfield(mut self, bit_offset: usize, bit_size: usize, is_absolute: bool) -> Self {
         self.bit_offset = Some(bit_offset);
         self.bit_size = Some(bit_size);
+        self.bit_offset_is_absolute = is_absolute;
         self
     }
 
@@ -339,6 +342,7 @@ pub struct A2lEntry {
     pub type_name: String,
     pub bit_offset: Option<usize>,
     pub bit_size: Option<usize>,
+    pub bit_offset_is_absolute: bool,
     pub array_index: Option<Vec<usize>>,
     pub symbol_link_name: Option<String>,
     pub symbol_link_offset: Option<u64>,
@@ -360,6 +364,7 @@ impl A2lEntry {
             type_name,
             bit_offset: None,
             bit_size: None,
+            bit_offset_is_absolute: false,
             array_index: None,
             symbol_link_name: None,
             symbol_link_offset: None,
@@ -369,6 +374,13 @@ impl A2lEntry {
     pub fn with_bitfield(mut self, bit_offset: usize, bit_size: usize) -> Self {
         self.bit_offset = Some(bit_offset);
         self.bit_size = Some(bit_size);
+        self
+    }
+
+    pub fn with_bitfield_absolute(mut self, bit_offset: usize, bit_size: usize) -> Self {
+        self.bit_offset = Some(bit_offset);
+        self.bit_size = Some(bit_size);
+        self.bit_offset_is_absolute = true;
         self
     }
 

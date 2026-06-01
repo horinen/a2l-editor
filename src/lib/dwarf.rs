@@ -354,14 +354,14 @@ impl DwarfParser {
         for offset in offsets {
             if let Some(type_info) = self.type_cache.get_mut(&offset) {
                 for member in &mut type_info.members {
-                    if member.is_bitfield() {
-                        // DWARF2 格式: absolute_lsb = offset * 8 + (type_size * 8 - bit_offset - bit_size)
+                    if member.is_bitfield() && !member.bit_offset_is_absolute {
                         let storage_bits = member.type_size * 8;
                         let raw_bo = member.bit_offset.unwrap_or(0);
                         let raw_bs = member.bit_size.unwrap_or(0);
                         let absolute_lsb =
                             member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs);
                         member.bit_offset = Some(absolute_lsb);
+                        member.bit_offset_is_absolute = true;
                     }
                 }
             }
@@ -596,8 +596,8 @@ impl DwarfParser {
         let mut member = StructMember::new(name, offset, "unknown".to_string(), size)
             .with_type_offset(global_type_offset as u64);
 
-        if let Some((bit_offset, bit_size)) = bitfield_info {
-            member = member.with_bitfield(bit_offset, bit_size);
+        if let Some((bit_offset, bit_size, is_absolute)) = bitfield_info {
+            member = member.with_bitfield(bit_offset, bit_size, is_absolute);
         }
 
         Some(member)
@@ -1045,7 +1045,7 @@ impl DwarfParser {
 
     fn get_bitfield_info_static(
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-    ) -> Option<(usize, usize)> {
+    ) -> Option<(usize, usize, bool)> {
         let bit_size = entry
             .attr(gimli::constants::DW_AT_bit_size)
             .ok()
@@ -1060,21 +1060,26 @@ impl DwarfParser {
                 _ => None,
             })?;
 
-        let bit_offset = entry
-            .attr(gimli::constants::DW_AT_bit_offset)
-            .ok()
-            .flatten()
-            .and_then(|attr| match attr.value() {
-                gimli::AttributeValue::Udata(v) => Some(v as usize),
-                gimli::AttributeValue::Data1(v) => Some(v as usize),
-                gimli::AttributeValue::Data2(v) => Some(v as usize),
-                gimli::AttributeValue::Data4(v) => Some(v as usize),
-                gimli::AttributeValue::Data8(v) => Some(v as usize),
-                gimli::AttributeValue::Sdata(v) => Some(v as usize),
-                _ => None,
-            });
+        let read_attr = |attr_name| {
+            entry.attr(attr_name).ok().flatten().and_then(|attr| {
+                match attr.value() {
+                    gimli::AttributeValue::Udata(v) => Some(v as usize),
+                    gimli::AttributeValue::Data1(v) => Some(v as usize),
+                    gimli::AttributeValue::Data2(v) => Some(v as usize),
+                    gimli::AttributeValue::Data4(v) => Some(v as usize),
+                    gimli::AttributeValue::Data8(v) => Some(v as usize),
+                    gimli::AttributeValue::Sdata(v) => Some(v as usize),
+                    _ => None,
+                }
+            })
+        };
 
-        Some((bit_offset.unwrap_or(0), bit_size))
+        if let Some(data_bit_offset) = read_attr(gimli::constants::DW_AT_data_bit_offset) {
+            return Some((data_bit_offset, bit_size, true));
+        }
+
+        let bit_offset = read_attr(gimli::constants::DW_AT_bit_offset).unwrap_or(0);
+        Some((bit_offset, bit_size, false))
     }
 
     pub fn debug_member_type(&self, struct_name: &str) {
