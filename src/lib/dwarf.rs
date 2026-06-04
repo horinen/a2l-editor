@@ -97,6 +97,8 @@ impl TypeResolver {
         Self::resolve_type_graph(type_cache, type_refs);
         Self::resolve_array_element_types(type_cache, array_elem_offsets);
         Self::resolve_alias_chains(type_cache, type_refs);
+        Self::resolve_member_types(type_cache);
+        Self::normalize_bitfield_offsets(type_cache);
     }
 
     fn resolve_type_graph(type_cache: &mut HashMap<u64, TypeInfo>, type_refs: &HashMap<u64, u64>) {
@@ -150,9 +152,6 @@ impl TypeResolver {
                 Self::copy_resolved_type(type_cache, from_offset, to_offset, true);
             }
         }
-
-        Self::resolve_alias_chains(type_cache, type_refs);
-        Self::resolve_member_types(type_cache);
     }
 
     fn copy_resolved_type(
@@ -300,12 +299,63 @@ impl TypeResolver {
         }
     }
 
+    fn normalize_bitfield_offsets(type_cache: &mut HashMap<u64, TypeInfo>) {
+        let offsets: Vec<u64> = type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+            .map(|(offset, _)| *offset)
+            .collect();
+
+        for offset in offsets {
+            if let Some(type_info) = type_cache.get_mut(&offset) {
+                for member in &mut type_info.members {
+                    if member.is_bitfield() && !member.bit_offset_is_absolute {
+                        let storage_bits = member.type_size * 8;
+                        let raw_bo = member.bit_offset.unwrap_or(0);
+                        let raw_bs = member.bit_size.unwrap_or(0);
+                        let absolute_lsb =
+                            member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs);
+                        member.bit_offset = Some(absolute_lsb);
+                        member.bit_offset_is_absolute = true;
+                    }
+                }
+            }
+        }
+    }
+
     fn same_resolved_type(left: &TypeInfo, right: &TypeInfo) -> bool {
         if left.kind != right.kind
             || left.size != right.size
             || left.array_dims != right.array_dims
             || left.members.len() != right.members.len()
             || left.variants.len() != right.variants.len()
+        {
+            return false;
+        }
+
+        if !left
+            .members
+            .iter()
+            .zip(&right.members)
+            .all(|(left, right)| {
+                left.name == right.name
+                    && left.offset == right.offset
+                    && left.type_name == right.type_name
+                    && left.type_size == right.type_size
+                    && left.type_offset == right.type_offset
+                    && left.bit_offset == right.bit_offset
+                    && left.bit_size == right.bit_size
+                    && left.bit_offset_is_absolute == right.bit_offset_is_absolute
+            })
+        {
+            return false;
+        }
+
+        if !left
+            .variants
+            .iter()
+            .zip(&right.variants)
+            .all(|(left, right)| left.name == right.name && left.value == right.value)
         {
             return false;
         }
@@ -446,34 +496,7 @@ impl DwarfParser {
             &self.type_refs,
             &self.array_elem_offsets,
         );
-        self.normalize_bitfield_offsets();
-
         Ok(())
-    }
-
-    fn normalize_bitfield_offsets(&mut self) {
-        let offsets: Vec<u64> = self
-            .type_cache
-            .iter()
-            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
-            .map(|(offset, _)| *offset)
-            .collect();
-
-        for offset in offsets {
-            if let Some(type_info) = self.type_cache.get_mut(&offset) {
-                for member in &mut type_info.members {
-                    if member.is_bitfield() && !member.bit_offset_is_absolute {
-                        let storage_bits = member.type_size * 8;
-                        let raw_bo = member.bit_offset.unwrap_or(0);
-                        let raw_bs = member.bit_size.unwrap_or(0);
-                        let absolute_lsb =
-                            member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs);
-                        member.bit_offset = Some(absolute_lsb);
-                        member.bit_offset_is_absolute = true;
-                    }
-                }
-            }
-        }
     }
 
     fn parse_unit_types(
@@ -1613,5 +1636,128 @@ mod tests {
             inner.pointer_target.as_deref().unwrap().kind,
             TypeKind::Enum
         );
+    }
+
+    #[test]
+    fn refreshes_array_element_when_member_signature_changes() {
+        let mut parser = DwarfParser::new();
+        let struct_offset = 0x10;
+        let array_offset = 0x20;
+
+        let stale_member =
+            StructMember::new("OldStatus".to_string(), 0, "unsigned char".to_string(), 1);
+        let fresh_member =
+            StructMember::new("NewStatus".to_string(), 1, "unsigned char".to_string(), 1);
+
+        parser.type_cache.insert(
+            struct_offset,
+            TypeInfo::struct_type(
+                "StatusBits".to_string(),
+                2,
+                vec![fresh_member],
+                struct_offset,
+            ),
+        );
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[2]".to_string(),
+                4,
+                TypeInfo::struct_type(
+                    "StatusBits".to_string(),
+                    2,
+                    vec![stale_member],
+                    struct_offset,
+                ),
+                vec![2],
+                array_offset,
+            ),
+        );
+        parser
+            .array_elem_offsets
+            .insert(array_offset, struct_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&array_offset).unwrap();
+        let elem = resolved.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.members[0].name, "NewStatus");
+        assert_eq!(elem.members[0].offset, 1);
+    }
+
+    #[test]
+    fn refreshes_array_element_when_enum_variant_signature_changes() {
+        let mut parser = DwarfParser::new();
+        let enum_offset = 0x10;
+        let array_offset = 0x20;
+
+        let stale_variant = EnumVariant::new("OldFault".to_string(), 1);
+        let fresh_variant = EnumVariant::new("NewFault".to_string(), 2);
+
+        parser.type_cache.insert(
+            enum_offset,
+            TypeInfo::enum_type(
+                "FaultId".to_string(),
+                1,
+                TypeEncoding::Unsigned,
+                vec![fresh_variant],
+                enum_offset,
+            ),
+        );
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[2]".to_string(),
+                2,
+                TypeInfo::enum_type(
+                    "FaultId".to_string(),
+                    1,
+                    TypeEncoding::Unsigned,
+                    vec![stale_variant],
+                    enum_offset,
+                ),
+                vec![2],
+                array_offset,
+            ),
+        );
+        parser.array_elem_offsets.insert(array_offset, enum_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&array_offset).unwrap();
+        let elem = resolved.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.variants[0].name, "NewFault");
+        assert_eq!(elem.variants[0].value, 2);
+    }
+
+    #[test]
+    fn resolver_normalizes_relative_bitfield_offsets() {
+        let mut parser = DwarfParser::new();
+        let struct_offset = 0x10;
+        let member = StructMember::new("Status".to_string(), 1, "unsigned char".to_string(), 1)
+            .with_bitfield(6, 2, false);
+
+        parser.type_cache.insert(
+            struct_offset,
+            TypeInfo::struct_type("StatusBits".to_string(), 2, vec![member], struct_offset),
+        );
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&struct_offset).unwrap();
+        assert_eq!(resolved.members[0].bit_offset, Some(8));
+        assert!(resolved.members[0].bit_offset_is_absolute);
     }
 }
