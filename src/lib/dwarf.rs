@@ -206,6 +206,7 @@ impl DwarfParser {
 
         self.resolve_type_graph();
         self.resolve_array_element_types();
+        self.resolve_alias_chains();
         self.normalize_bitfield_offsets();
 
         Ok(())
@@ -304,6 +305,8 @@ impl DwarfParser {
             }
         }
 
+        self.resolve_alias_chains();
+
         // 第二轮：填充 StructMember 的 type_name / type_size
         let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = self
             .type_cache
@@ -338,6 +341,47 @@ impl DwarfParser {
                     if member.type_size == 0 {
                         member.type_size = type_size;
                     }
+                }
+            }
+        }
+    }
+
+    fn resolve_alias_chains(&mut self) {
+        for _ in 0..32 {
+            let refs: Vec<(u64, u64)> = self
+                .type_refs
+                .iter()
+                .map(|(from, to)| (*from, *to))
+                .collect();
+            let mut updates = Vec::new();
+
+            for (from_offset, to_offset) in refs {
+                let Some(current) = self.type_cache.get(&from_offset) else {
+                    continue;
+                };
+                let Some(target) = self.type_cache.get(&to_offset) else {
+                    continue;
+                };
+                if target.size == 0 {
+                    continue;
+                }
+                if current.size > 0 && Self::same_resolved_type(current, target) {
+                    continue;
+                }
+
+                updates.push((from_offset, target.clone()));
+            }
+
+            if updates.is_empty() {
+                break;
+            }
+
+            for (from_offset, target_type) in updates {
+                if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
+                    let own_name = type_info.name.clone();
+                    *type_info = target_type;
+                    type_info.name = own_name;
+                    type_info.offset = from_offset;
                 }
             }
         }
@@ -392,10 +436,7 @@ impl DwarfParser {
                             if let Some(array_type) = self.type_cache.get_mut(&array_offset) {
                                 let needs_update = match &array_type.pointer_target {
                                     None => true,
-                                    Some(current) => {
-                                        current.size != elem_type.size
-                                            || current.kind != elem_type.kind
-                                    }
+                                    Some(current) => !Self::same_resolved_type(current, &elem_type),
                                 };
                                 if needs_update {
                                     array_type.pointer_target = Some(Box::new(elem_type));
@@ -414,6 +455,28 @@ impl DwarfParser {
             if !changed {
                 break;
             }
+        }
+    }
+
+    fn same_resolved_type(left: &TypeInfo, right: &TypeInfo) -> bool {
+        if left.kind != right.kind
+            || left.size != right.size
+            || left.array_dims != right.array_dims
+            || left.members.len() != right.members.len()
+            || left.variants.len() != right.variants.len()
+        {
+            return false;
+        }
+
+        match (
+            left.pointer_target.as_deref(),
+            right.pointer_target.as_deref(),
+        ) {
+            (Some(left_target), Some(right_target)) => {
+                Self::same_resolved_type(left_target, right_target)
+            }
+            (None, None) => true,
+            _ => false,
         }
     }
 
@@ -1061,8 +1124,11 @@ impl DwarfParser {
             })?;
 
         let read_attr = |attr_name| {
-            entry.attr(attr_name).ok().flatten().and_then(|attr| {
-                match attr.value() {
+            entry
+                .attr(attr_name)
+                .ok()
+                .flatten()
+                .and_then(|attr| match attr.value() {
                     gimli::AttributeValue::Udata(v) => Some(v as usize),
                     gimli::AttributeValue::Data1(v) => Some(v as usize),
                     gimli::AttributeValue::Data2(v) => Some(v as usize),
@@ -1070,8 +1136,7 @@ impl DwarfParser {
                     gimli::AttributeValue::Data8(v) => Some(v as usize),
                     gimli::AttributeValue::Sdata(v) => Some(v as usize),
                     _ => None,
-                }
-            })
+                })
         };
 
         if let Some(data_bit_offset) = read_attr(gimli::constants::DW_AT_data_bit_offset) {
@@ -1367,4 +1432,181 @@ fn infer_type_from_name(name: &str, size: usize) -> TypeInfo {
     };
 
     TypeInfo::primitive(type_name, size, encoding)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_array_element_alias_chain_to_struct() {
+        let mut parser = DwarfParser::new();
+        let struct_offset = 0x10;
+        let alias_offset = 0x20;
+        let const_offset = 0x30;
+        let array_offset = 0x40;
+
+        let member = StructMember::new(
+            "FltDebValue".to_string(),
+            0,
+            "unsigned short int".to_string(),
+            2,
+        )
+        .with_bitfield(0, 14, true);
+        parser.type_cache.insert(
+            struct_offset,
+            TypeInfo::struct_type("FaultDebounce".to_string(), 2, vec![member], struct_offset),
+        );
+
+        let mut alias = TypeInfo::primitive("Alias".to_string(), 0, TypeEncoding::Unsigned);
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, struct_offset);
+
+        let mut const_type = TypeInfo::primitive("const".to_string(), 0, TypeEncoding::Unsigned);
+        const_type.offset = const_offset;
+        parser.type_cache.insert(const_offset, const_type);
+        parser.type_refs.insert(const_offset, alias_offset);
+
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[13]".to_string(),
+                26,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![13],
+                array_offset,
+            ),
+        );
+        parser.array_elem_offsets.insert(array_offset, const_offset);
+
+        parser.resolve_alias_chains();
+        parser.resolve_array_element_types();
+
+        let array_type = parser.type_cache.get(&array_offset).unwrap();
+        let elem_type = array_type.pointer_target.as_deref().unwrap();
+        assert_eq!(elem_type.kind, TypeKind::Struct);
+        assert_eq!(elem_type.size, 2);
+        assert_eq!(elem_type.members[0].name, "FltDebValue");
+    }
+
+    #[test]
+    fn propagates_nested_array_element_updates() {
+        let mut parser = DwarfParser::new();
+        let struct_offset = 0x10;
+        let inner_array_offset = 0x20;
+        let outer_array_offset = 0x30;
+
+        let member = StructMember::new(
+            "CurrentDebStatus".to_string(),
+            1,
+            "unsigned char".to_string(),
+            1,
+        )
+        .with_bitfield(14, 2, true);
+        let struct_type =
+            TypeInfo::struct_type("FaultDebounce".to_string(), 2, vec![member], struct_offset);
+        parser.type_cache.insert(struct_offset, struct_type);
+
+        let stale_inner = TypeInfo::array_type(
+            "array[23]".to_string(),
+            46,
+            TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+            vec![23],
+            inner_array_offset,
+        );
+        parser
+            .type_cache
+            .insert(inner_array_offset, stale_inner.clone());
+        parser
+            .array_elem_offsets
+            .insert(inner_array_offset, struct_offset);
+
+        parser.type_cache.insert(
+            outer_array_offset,
+            TypeInfo::array_type(
+                "array[1]".to_string(),
+                46,
+                stale_inner,
+                vec![1],
+                outer_array_offset,
+            ),
+        );
+        parser
+            .array_elem_offsets
+            .insert(outer_array_offset, inner_array_offset);
+
+        parser.resolve_array_element_types();
+
+        let outer = parser.type_cache.get(&outer_array_offset).unwrap();
+        let inner = outer.pointer_target.as_deref().unwrap();
+        let elem = inner.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.kind, TypeKind::Struct);
+        assert_eq!(elem.members[0].name, "CurrentDebStatus");
+    }
+
+    #[test]
+    fn refreshes_alias_after_array_targets_are_resolved() {
+        let mut parser = DwarfParser::new();
+        let enum_offset = 0x10;
+        let inner_array_offset = 0x20;
+        let outer_array_offset = 0x30;
+        let const_offset = 0x40;
+
+        parser.type_cache.insert(
+            enum_offset,
+            TypeInfo::enum_type(
+                "FaultId".to_string(),
+                1,
+                TypeEncoding::Unsigned,
+                Vec::new(),
+                enum_offset,
+            ),
+        );
+        parser.type_cache.insert(
+            inner_array_offset,
+            TypeInfo::array_type(
+                "array[6]".to_string(),
+                6,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![6],
+                inner_array_offset,
+            ),
+        );
+        parser
+            .array_elem_offsets
+            .insert(inner_array_offset, enum_offset);
+
+        parser.type_cache.insert(
+            outer_array_offset,
+            TypeInfo::array_type(
+                "array[4]".to_string(),
+                24,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![4],
+                outer_array_offset,
+            ),
+        );
+        parser
+            .array_elem_offsets
+            .insert(outer_array_offset, inner_array_offset);
+
+        let mut const_type = TypeInfo::primitive("const".to_string(), 0, TypeEncoding::Unsigned);
+        const_type.offset = const_offset;
+        parser.type_cache.insert(const_offset, const_type);
+        parser.type_refs.insert(const_offset, outer_array_offset);
+
+        parser.resolve_alias_chains();
+        parser.resolve_array_element_types();
+        parser.resolve_alias_chains();
+
+        let const_array = parser.type_cache.get(&const_offset).unwrap();
+        let inner = const_array.pointer_target.as_deref().unwrap();
+        assert_eq!(const_array.array_dims, vec![4]);
+        assert_eq!(inner.array_dims, vec![6]);
+        assert_eq!(
+            inner.pointer_target.as_deref().unwrap().kind,
+            TypeKind::Enum
+        );
+    }
 }

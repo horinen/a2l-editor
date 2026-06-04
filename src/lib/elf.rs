@@ -376,9 +376,7 @@ impl ElfParser {
         } else {
             bg.container_size * 8
         };
-        let bit_offset = if member.bit_offset_is_absolute
-            || raw_bo + raw_bs > storage_bits
-        {
+        let bit_offset = if member.bit_offset_is_absolute || raw_bo + raw_bs > storage_bits {
             raw_bo
         } else {
             member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs)
@@ -533,6 +531,11 @@ impl ElfParser {
         (all_dims, elem_type.map(|b| *b), current_size)
     }
 
+    fn is_bitfield_composite(type_info: &TypeInfo) -> bool {
+        matches!(type_info.kind, TypeKind::Struct | TypeKind::Union)
+            && type_info.members.iter().any(|member| member.is_bitfield())
+    }
+
     fn expand_multi_dim_array(
         prefix: &str,
         base_addr: u64,
@@ -550,6 +553,23 @@ impl ElfParser {
             } else {
                 elem_type.clone()
             };
+            if Self::is_bitfield_composite(&fixed_elem_type) {
+                let a2l_type =
+                    infer_a2l_type_from_encoding(fixed_elem_type.size, fixed_elem_type.encoding);
+                ctx.store.add(
+                    A2lEntry::new(
+                        prefix.to_string(),
+                        base_addr,
+                        fixed_elem_type.size,
+                        a2l_type.to_string(),
+                        fixed_elem_type.name.clone(),
+                    )
+                    .with_symbol_link(
+                        ctx.root_symbol.to_string(),
+                        base_addr.saturating_sub(ctx.root_addr),
+                    ),
+                );
+            }
             Self::expand_entry(prefix, base_addr, &fixed_elem_type, depth, ctx);
             return;
         }
