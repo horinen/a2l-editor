@@ -1,11 +1,16 @@
 use crate::types::{A2lEntry, A2lEntryStore};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 pub struct DataPackage {
     db: Connection,
     path: PathBuf,
+    lock_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -70,6 +75,7 @@ impl DataPackage {
         let package = Self {
             db,
             path: path.to_path_buf(),
+            lock_path: None,
         };
         package.validate_parser_version()?;
         Ok(package)
@@ -77,6 +83,7 @@ impl DataPackage {
 
     pub fn create(elf_path: &Path) -> Result<Self> {
         let package_path = Self::get_package_path(elf_path);
+        let lock_path = Self::acquire_create_lock(&package_path)?;
         let file_name = elf_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -131,10 +138,12 @@ impl DataPackage {
         Ok(Self {
             db,
             path: package_path,
+            lock_path: Some(lock_path),
         })
     }
 
     pub fn create_at(path: &Path, elf_path: &Path) -> Result<Self> {
+        let lock_path = Self::acquire_create_lock(path)?;
         let file_name = elf_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -189,11 +198,51 @@ impl DataPackage {
         Ok(Self {
             db,
             path: path.to_path_buf(),
+            lock_path: Some(lock_path),
         })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn lock_path_for(path: &Path) -> PathBuf {
+        path.with_extension("a2ldata.lock")
+    }
+
+    fn acquire_create_lock(path: &Path) -> Result<PathBuf> {
+        let lock_path = Self::lock_path_for(path);
+        let timeout = Duration::from_secs(120);
+        let start = SystemTime::now();
+
+        loop {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(file) => {
+                    drop(file);
+                    return Ok(lock_path);
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                    if start.elapsed().unwrap_or_default() > timeout {
+                        bail!("等待数据包生成锁超时: {}", lock_path.display());
+                    }
+                    thread::sleep(Duration::from_millis(200));
+                }
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("无法创建数据包生成锁: {}", lock_path.display()));
+                }
+            }
+        }
+    }
+
+    fn release_create_lock(&mut self) {
+        if let Some(lock_path) = self.lock_path.take() {
+            let _ = std::fs::remove_file(lock_path);
+        }
     }
 
     fn validate_parser_version(&self) -> Result<()> {
@@ -282,6 +331,7 @@ impl DataPackage {
         )?;
 
         tx.commit().context("无法提交事务")?;
+        self.release_create_lock();
 
         Ok(())
     }
@@ -347,6 +397,12 @@ impl DataPackage {
     }
 }
 
+impl Drop for DataPackage {
+    fn drop(&mut self) {
+        self.release_create_lock();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +462,22 @@ mod tests {
             package.get_meta().unwrap().parser_version,
             env!("CARGO_PKG_VERSION")
         );
+        drop(package);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn create_lock_is_removed_after_save() {
+        let db_path = temp_path("locked-package.a2ldata");
+        let lock_path = DataPackage::lock_path_for(&db_path);
+        let elf_path = PathBuf::from("sample.elf");
+
+        let mut package = DataPackage::create_at(&db_path, &elf_path).unwrap();
+        assert!(lock_path.exists());
+
+        package.save_entries(&A2lEntryStore::new()).unwrap();
+        assert!(!lock_path.exists());
+
         drop(package);
         let _ = fs::remove_file(db_path);
     }
