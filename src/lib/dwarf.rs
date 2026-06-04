@@ -86,6 +86,243 @@ impl CompositeBuilder {
     }
 }
 
+struct TypeResolver;
+
+impl TypeResolver {
+    fn resolve(
+        type_cache: &mut HashMap<u64, TypeInfo>,
+        type_refs: &HashMap<u64, u64>,
+        array_elem_offsets: &HashMap<u64, u64>,
+    ) {
+        Self::resolve_type_graph(type_cache, type_refs);
+        Self::resolve_array_element_types(type_cache, array_elem_offsets);
+        Self::resolve_alias_chains(type_cache, type_refs);
+    }
+
+    fn resolve_type_graph(type_cache: &mut HashMap<u64, TypeInfo>, type_refs: &HashMap<u64, u64>) {
+        let refs: Vec<(u64, u64)> = type_refs.iter().map(|(k, v)| (*k, *v)).collect();
+
+        let mut in_deg: HashMap<u64, usize> = HashMap::new();
+        let mut dependents: HashMap<u64, Vec<u64>> = HashMap::new();
+
+        for &(from, to) in &refs {
+            *in_deg.entry(from).or_insert(0) += 1;
+            dependents.entry(to).or_default().push(from);
+        }
+
+        let mut queue: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+        for &(from, to) in &refs {
+            if type_cache.get(&to).map(|t| t.size > 0).unwrap_or(false)
+                && in_deg.get(&from).copied().unwrap_or(0) == 1
+            {
+                queue.push_back(from);
+            }
+        }
+
+        let mut sorted: Vec<u64> = Vec::new();
+        let mut visited_sort: HashSet<u64> = HashSet::new();
+        while let Some(node) = queue.pop_front() {
+            if visited_sort.contains(&node) {
+                continue;
+            }
+            visited_sort.insert(node);
+            sorted.push(node);
+
+            if let Some(deps) = dependents.get(&node) {
+                for &dep in deps {
+                    let deg = in_deg.get_mut(&dep).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(dep);
+                    }
+                }
+            }
+        }
+
+        for offset in &sorted {
+            if let Some(&target_offset) = type_refs.get(offset) {
+                Self::copy_resolved_type(type_cache, *offset, target_offset, true);
+            }
+        }
+
+        for &(from_offset, to_offset) in &refs {
+            if to_offset > 0 {
+                Self::copy_resolved_type(type_cache, from_offset, to_offset, true);
+            }
+        }
+
+        Self::resolve_alias_chains(type_cache, type_refs);
+        Self::resolve_member_types(type_cache);
+    }
+
+    fn copy_resolved_type(
+        type_cache: &mut HashMap<u64, TypeInfo>,
+        from_offset: u64,
+        to_offset: u64,
+        only_empty: bool,
+    ) {
+        let Some(target_type) = type_cache.get(&to_offset).cloned() else {
+            return;
+        };
+        if target_type.size == 0 {
+            return;
+        }
+        if let Some(type_info) = type_cache.get_mut(&from_offset) {
+            if only_empty && type_info.size > 0 {
+                return;
+            }
+            let own_name = type_info.name.clone();
+            *type_info = target_type;
+            type_info.name = own_name;
+            type_info.offset = from_offset;
+        }
+    }
+
+    fn resolve_member_types(type_cache: &mut HashMap<u64, TypeInfo>) {
+        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+            .map(|(offset, type_info)| {
+                let member_updates: Vec<(usize, String, usize)> = type_info
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, member)| {
+                        member.type_offset.and_then(|type_offset| {
+                            if type_offset > 0 {
+                                type_cache
+                                    .get(&type_offset)
+                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .collect();
+                (*offset, member_updates)
+            })
+            .collect();
+
+        for (offset, updates) in resolutions {
+            if let Some(type_info) = type_cache.get_mut(&offset) {
+                for (idx, type_name, type_size) in updates {
+                    let member = &mut type_info.members[idx];
+                    member.type_name = type_name;
+                    if member.type_size == 0 {
+                        member.type_size = type_size;
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_alias_chains(
+        type_cache: &mut HashMap<u64, TypeInfo>,
+        type_refs: &HashMap<u64, u64>,
+    ) {
+        for _ in 0..32 {
+            let refs: Vec<(u64, u64)> = type_refs.iter().map(|(from, to)| (*from, *to)).collect();
+            let mut updates = Vec::new();
+
+            for (from_offset, to_offset) in refs {
+                let Some(current) = type_cache.get(&from_offset) else {
+                    continue;
+                };
+                let Some(target) = type_cache.get(&to_offset) else {
+                    continue;
+                };
+                if target.size == 0 {
+                    continue;
+                }
+                if current.size > 0 && Self::same_resolved_type(current, target) {
+                    continue;
+                }
+
+                updates.push((from_offset, target.clone()));
+            }
+
+            if updates.is_empty() {
+                break;
+            }
+
+            for (from_offset, target_type) in updates {
+                if let Some(type_info) = type_cache.get_mut(&from_offset) {
+                    let own_name = type_info.name.clone();
+                    *type_info = target_type;
+                    type_info.name = own_name;
+                    type_info.offset = from_offset;
+                }
+            }
+        }
+    }
+
+    fn resolve_array_element_types(
+        type_cache: &mut HashMap<u64, TypeInfo>,
+        array_elem_offsets: &HashMap<u64, u64>,
+    ) {
+        let array_offsets: Vec<u64> = type_cache
+            .iter()
+            .filter(|(_, t)| t.kind == TypeKind::Array)
+            .map(|(offset, _)| *offset)
+            .collect();
+
+        let elem_type_offsets: HashMap<u64, u64> =
+            array_elem_offsets.iter().map(|(k, v)| (*k, *v)).collect();
+
+        for _ in 0..10 {
+            let mut changed = false;
+            for &array_offset in &array_offsets {
+                if let Some(&elem_offset) = elem_type_offsets.get(&array_offset) {
+                    if elem_offset > 0 {
+                        if let Some(elem_type) = type_cache.get(&elem_offset).cloned() {
+                            if let Some(array_type) = type_cache.get_mut(&array_offset) {
+                                let needs_update = match &array_type.pointer_target {
+                                    None => true,
+                                    Some(current) => !Self::same_resolved_type(current, &elem_type),
+                                };
+                                if needs_update {
+                                    array_type.pointer_target = Some(Box::new(elem_type));
+                                    array_type.encoding = array_type
+                                        .pointer_target
+                                        .as_ref()
+                                        .map(|e| e.encoding)
+                                        .unwrap_or(TypeEncoding::Unsigned);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    fn same_resolved_type(left: &TypeInfo, right: &TypeInfo) -> bool {
+        if left.kind != right.kind
+            || left.size != right.size
+            || left.array_dims != right.array_dims
+            || left.members.len() != right.members.len()
+            || left.variants.len() != right.variants.len()
+        {
+            return false;
+        }
+
+        match (
+            left.pointer_target.as_deref(),
+            right.pointer_target.as_deref(),
+        ) {
+            (Some(left_target), Some(right_target)) => {
+                Self::same_resolved_type(left_target, right_target)
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 pub struct DwarfParser {
     type_cache: HashMap<u64, TypeInfo>,
     struct_map: HashMap<String, TypeInfo>,
@@ -204,187 +441,14 @@ impl DwarfParser {
             }
         }
 
-        self.resolve_type_graph();
-        self.resolve_array_element_types();
-        self.resolve_alias_chains();
+        TypeResolver::resolve(
+            &mut self.type_cache,
+            &self.type_refs,
+            &self.array_elem_offsets,
+        );
         self.normalize_bitfield_offsets();
 
         Ok(())
-    }
-
-    fn resolve_type_graph(&mut self) {
-        let refs: Vec<(u64, u64)> = self.type_refs.iter().map(|(k, v)| (*k, *v)).collect();
-
-        // 构建 DAG: Kahn 拓扑排序
-        let mut in_deg: HashMap<u64, usize> = HashMap::new();
-        let mut dependents: HashMap<u64, Vec<u64>> = HashMap::new();
-
-        for &(from, to) in &refs {
-            *in_deg.entry(from).or_insert(0) += 1;
-            dependents.entry(to).or_default().push(from);
-        }
-
-        // 入度为 0 的节点：目标类型已解析（size > 0）
-        let mut queue: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
-        for &(from, to) in &refs {
-            if self
-                .type_cache
-                .get(&to)
-                .map(|t| t.size > 0)
-                .unwrap_or(false)
-            {
-                if in_deg.get(&from).copied().unwrap_or(0) == 1 {
-                    queue.push_back(from);
-                }
-            }
-        }
-
-        let mut sorted: Vec<u64> = Vec::new();
-        let mut visited_sort: HashSet<u64> = HashSet::new();
-        while let Some(node) = queue.pop_front() {
-            if visited_sort.contains(&node) {
-                continue;
-            }
-            visited_sort.insert(node);
-            sorted.push(node);
-
-            if let Some(deps) = dependents.get(&node) {
-                for &dep in deps {
-                    let deg = in_deg.get_mut(&dep).unwrap();
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-
-        // 按拓扑序解析 typedef/const/volatile
-        for offset in &sorted {
-            if let Some(&target_offset) = self.type_refs.get(offset) {
-                if let Some(target_type) = self.type_cache.get(&target_offset).cloned() {
-                    if target_type.size > 0 {
-                        if let Some(type_info) = self.type_cache.get_mut(offset) {
-                            if type_info.size == 0 {
-                                let own_name = type_info.name.clone();
-                                type_info.size = target_type.size;
-                                type_info.encoding = target_type.encoding;
-                                type_info.kind = target_type.kind;
-                                type_info.members = target_type.members;
-                                type_info.variants = target_type.variants;
-                                type_info.array_dims = target_type.array_dims;
-                                type_info.pointer_target = target_type.pointer_target;
-                                type_info.name = own_name;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 兜底：处理拓扑排序未覆盖的节点
-        for &(from_offset, to_offset) in &refs {
-            if to_offset > 0 {
-                if let Some(target_type) = self.type_cache.get(&to_offset).cloned() {
-                    if target_type.size > 0 {
-                        if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
-                            if type_info.size == 0 {
-                                let own_name = type_info.name.clone();
-                                type_info.size = target_type.size;
-                                type_info.encoding = target_type.encoding;
-                                type_info.kind = target_type.kind;
-                                type_info.members = target_type.members;
-                                type_info.variants = target_type.variants;
-                                type_info.array_dims = target_type.array_dims;
-                                type_info.pointer_target = target_type.pointer_target;
-                                type_info.name = own_name;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        self.resolve_alias_chains();
-
-        // 第二轮：填充 StructMember 的 type_name / type_size
-        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = self
-            .type_cache
-            .iter()
-            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
-            .map(|(offset, type_info)| {
-                let member_updates: Vec<(usize, String, usize)> = type_info
-                    .members
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, member)| {
-                        member.type_offset.and_then(|type_offset| {
-                            if type_offset > 0 {
-                                self.type_cache
-                                    .get(&type_offset)
-                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect();
-                (*offset, member_updates)
-            })
-            .collect();
-
-        for (offset, updates) in resolutions {
-            if let Some(type_info) = self.type_cache.get_mut(&offset) {
-                for (idx, type_name, type_size) in updates {
-                    let member = &mut type_info.members[idx];
-                    member.type_name = type_name;
-                    if member.type_size == 0 {
-                        member.type_size = type_size;
-                    }
-                }
-            }
-        }
-    }
-
-    fn resolve_alias_chains(&mut self) {
-        for _ in 0..32 {
-            let refs: Vec<(u64, u64)> = self
-                .type_refs
-                .iter()
-                .map(|(from, to)| (*from, *to))
-                .collect();
-            let mut updates = Vec::new();
-
-            for (from_offset, to_offset) in refs {
-                let Some(current) = self.type_cache.get(&from_offset) else {
-                    continue;
-                };
-                let Some(target) = self.type_cache.get(&to_offset) else {
-                    continue;
-                };
-                if target.size == 0 {
-                    continue;
-                }
-                if current.size > 0 && Self::same_resolved_type(current, target) {
-                    continue;
-                }
-
-                updates.push((from_offset, target.clone()));
-            }
-
-            if updates.is_empty() {
-                break;
-            }
-
-            for (from_offset, target_type) in updates {
-                if let Some(type_info) = self.type_cache.get_mut(&from_offset) {
-                    let own_name = type_info.name.clone();
-                    *type_info = target_type;
-                    type_info.name = own_name;
-                    type_info.offset = from_offset;
-                }
-            }
-        }
     }
 
     fn normalize_bitfield_offsets(&mut self) {
@@ -409,74 +473,6 @@ impl DwarfParser {
                     }
                 }
             }
-        }
-    }
-
-    fn resolve_array_element_types(&mut self) {
-        let array_offsets: Vec<u64> = self
-            .type_cache
-            .iter()
-            .filter(|(_, t)| t.kind == TypeKind::Array)
-            .map(|(offset, _)| *offset)
-            .collect();
-
-        let elem_type_offsets: std::collections::HashMap<u64, u64> = self
-            .array_elem_offsets
-            .iter()
-            .map(|(k, v)| (*k, *v))
-            .collect();
-
-        let max_iterations = 10;
-        for _ in 0..max_iterations {
-            let mut changed = false;
-            for &array_offset in &array_offsets {
-                if let Some(&elem_offset) = elem_type_offsets.get(&array_offset) {
-                    if elem_offset > 0 {
-                        if let Some(elem_type) = self.type_cache.get(&elem_offset).cloned() {
-                            if let Some(array_type) = self.type_cache.get_mut(&array_offset) {
-                                let needs_update = match &array_type.pointer_target {
-                                    None => true,
-                                    Some(current) => !Self::same_resolved_type(current, &elem_type),
-                                };
-                                if needs_update {
-                                    array_type.pointer_target = Some(Box::new(elem_type));
-                                    array_type.encoding = array_type
-                                        .pointer_target
-                                        .as_ref()
-                                        .map(|e| e.encoding)
-                                        .unwrap_or(TypeEncoding::Unsigned);
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-    }
-
-    fn same_resolved_type(left: &TypeInfo, right: &TypeInfo) -> bool {
-        if left.kind != right.kind
-            || left.size != right.size
-            || left.array_dims != right.array_dims
-            || left.members.len() != right.members.len()
-            || left.variants.len() != right.variants.len()
-        {
-            return false;
-        }
-
-        match (
-            left.pointer_target.as_deref(),
-            right.pointer_target.as_deref(),
-        ) {
-            (Some(left_target), Some(right_target)) => {
-                Self::same_resolved_type(left_target, right_target)
-            }
-            (None, None) => true,
-            _ => false,
         }
     }
 
@@ -1480,8 +1476,11 @@ mod tests {
         );
         parser.array_elem_offsets.insert(array_offset, const_offset);
 
-        parser.resolve_alias_chains();
-        parser.resolve_array_element_types();
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
 
         let array_type = parser.type_cache.get(&array_offset).unwrap();
         let elem_type = array_type.pointer_target.as_deref().unwrap();
@@ -1536,7 +1535,11 @@ mod tests {
             .array_elem_offsets
             .insert(outer_array_offset, inner_array_offset);
 
-        parser.resolve_array_element_types();
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
 
         let outer = parser.type_cache.get(&outer_array_offset).unwrap();
         let inner = outer.pointer_target.as_deref().unwrap();
@@ -1596,9 +1599,11 @@ mod tests {
         parser.type_cache.insert(const_offset, const_type);
         parser.type_refs.insert(const_offset, outer_array_offset);
 
-        parser.resolve_alias_chains();
-        parser.resolve_array_element_types();
-        parser.resolve_alias_chains();
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
 
         let const_array = parser.type_cache.get(&const_offset).unwrap();
         let inner = const_array.pointer_target.as_deref().unwrap();
