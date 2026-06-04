@@ -1,5 +1,5 @@
 use crate::types::{A2lEntry, A2lEntryStore};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
@@ -14,9 +14,12 @@ pub struct PackageMeta {
     pub elf_path: Option<String>,
     pub entry_count: usize,
     pub created_at: i64,
+    pub parser_version: String,
 }
 
 impl DataPackage {
+    const PARSER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
     pub fn get_package_path(elf_path: &Path) -> PathBuf {
         elf_path.with_extension("elf.a2ldata")
     }
@@ -41,7 +44,8 @@ impl DataPackage {
                 file_name TEXT,
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
-                created_at INTEGER
+                created_at INTEGER,
+                parser_version TEXT NOT NULL
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -63,10 +67,12 @@ impl DataPackage {
         )
         .context("无法创建数据包表")?;
 
-        Ok(Self {
+        let package = Self {
             db,
             path: path.to_path_buf(),
-        })
+        };
+        package.validate_parser_version()?;
+        Ok(package)
     }
 
     pub fn create(elf_path: &Path) -> Result<Self> {
@@ -76,6 +82,9 @@ impl DataPackage {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
+        if package_path.exists() {
+            std::fs::remove_file(&package_path).context("无法替换旧数据包")?;
+        }
         let db = Connection::open(&package_path).context("无法创建数据包")?;
 
         db.execute_batch(
@@ -85,7 +94,8 @@ impl DataPackage {
                 file_name TEXT,
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
-                created_at INTEGER
+                created_at INTEGER,
+                parser_version TEXT NOT NULL
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -103,17 +113,19 @@ impl DataPackage {
             );
             
             CREATE INDEX IF NOT EXISTS idx_a2l_entries_name ON a2l_entries(full_name);
-            
-            INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at)
-            VALUES (1, ?1, ?2, ?3);
             "#,
         )
         .context("无法初始化数据包")?;
 
         let created_at = chrono::Utc::now().timestamp();
         db.execute(
-            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at) VALUES (1, ?1, ?2, ?3)",
-            params![file_name, elf_path.to_string_lossy().to_string(), created_at],
+            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version) VALUES (1, ?1, ?2, ?3, ?4)",
+            params![
+                file_name,
+                elf_path.to_string_lossy().to_string(),
+                created_at,
+                Self::PARSER_VERSION,
+            ],
         )?;
 
         Ok(Self {
@@ -128,6 +140,9 @@ impl DataPackage {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
+        if path.exists() {
+            std::fs::remove_file(path).context("无法替换旧数据包")?;
+        }
         let db = Connection::open(path).context("无法创建数据包")?;
 
         db.execute_batch(
@@ -137,7 +152,8 @@ impl DataPackage {
                 file_name TEXT,
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
-                created_at INTEGER
+                created_at INTEGER,
+                parser_version TEXT NOT NULL
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -161,8 +177,13 @@ impl DataPackage {
 
         let created_at = chrono::Utc::now().timestamp();
         db.execute(
-            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at) VALUES (1, ?1, ?2, ?3)",
-            params![file_name, elf_path.to_string_lossy().to_string(), created_at],
+            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version) VALUES (1, ?1, ?2, ?3, ?4)",
+            params![
+                file_name,
+                elf_path.to_string_lossy().to_string(),
+                created_at,
+                Self::PARSER_VERSION,
+            ],
         )?;
 
         Ok(Self {
@@ -175,11 +196,30 @@ impl DataPackage {
         &self.path
     }
 
+    fn validate_parser_version(&self) -> Result<()> {
+        let version: String = self
+            .db
+            .query_row("SELECT parser_version FROM meta WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .context("数据包版本过旧，请重新生成")?;
+
+        if version != Self::PARSER_VERSION {
+            bail!(
+                "数据包由解析器版本 {} 生成，当前版本为 {}，请重新生成",
+                version,
+                Self::PARSER_VERSION
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn get_meta(&self) -> Result<PackageMeta> {
         let meta = self
             .db
             .query_row(
-                "SELECT file_name, elf_path, entry_count, created_at FROM meta WHERE id = 1",
+                "SELECT file_name, elf_path, entry_count, created_at, parser_version FROM meta WHERE id = 1",
                 [],
                 |row| {
                     Ok(PackageMeta {
@@ -187,6 +227,7 @@ impl DataPackage {
                         elf_path: row.get(1)?,
                         entry_count: row.get::<_, i64>(2)? as usize,
                         created_at: row.get(3)?,
+                        parser_version: row.get(4)?,
                     })
                 },
             )
@@ -303,5 +344,97 @@ impl DataPackage {
             .unwrap_or(0);
 
         Ok(count as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::fs;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let unique = format!(
+            "a2l-editor-{}-{}-{}",
+            name,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    #[test]
+    fn new_package_records_parser_version() {
+        let db_path = temp_path("package-version.a2ldata");
+        let elf_path = PathBuf::from("sample.elf");
+
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
+        let meta = package.get_meta().unwrap();
+
+        assert_eq!(meta.parser_version, env!("CARGO_PKG_VERSION"));
+        drop(package);
+        let reopened = DataPackage::open_path(&db_path).unwrap();
+        assert_eq!(
+            reopened.get_meta().unwrap().parser_version,
+            env!("CARGO_PKG_VERSION")
+        );
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn create_at_replaces_old_schema_package() {
+        let db_path = temp_path("replace-old-package.a2ldata");
+        let db = Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            r#"
+            CREATE TABLE meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                file_name TEXT,
+                elf_path TEXT,
+                entry_count INTEGER DEFAULT 0,
+                created_at INTEGER
+            );
+            INSERT INTO meta (id, file_name, elf_path, entry_count, created_at)
+            VALUES (1, "old.elf", "old.elf", 0, 0);
+            "#,
+        )
+        .unwrap();
+        drop(db);
+
+        let package = DataPackage::create_at(&db_path, &PathBuf::from("new.elf")).unwrap();
+        assert_eq!(
+            package.get_meta().unwrap().parser_version,
+            env!("CARGO_PKG_VERSION")
+        );
+        drop(package);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn old_package_without_parser_version_is_rejected() {
+        let db_path = temp_path("old-package.a2ldata");
+        let db = Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            r#"
+            CREATE TABLE meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                file_name TEXT,
+                elf_path TEXT,
+                entry_count INTEGER DEFAULT 0,
+                created_at INTEGER
+            );
+            INSERT INTO meta (id, file_name, elf_path, entry_count, created_at)
+            VALUES (1, "sample.elf", "sample.elf", 0, 0);
+            "#,
+        )
+        .unwrap();
+        drop(db);
+
+        let err = match DataPackage::open_path(&db_path) {
+            Ok(_) => panic!("旧数据包不应被打开"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("数据包版本过旧"));
+        let _ = fs::remove_file(db_path);
     }
 }

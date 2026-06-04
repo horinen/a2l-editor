@@ -422,6 +422,11 @@ impl ElfParser {
         depth: usize,
         ctx: &mut ExpandContext,
     ) {
+        // 数组展开规则：
+        // 1. primitive/enum 数组展开到最内层元素，保留所有维度索引。
+        // 2. bitfield struct/union 数组先生成元素容器，再展开位域成员。
+        // 3. 普通 struct/union 数组只递归展开成员，不额外生成元素容器。
+        // 4. 元素类型缺失时按推导出的元素大小降级为标量元素。
         let (effective_dims, final_elem_type, final_elem_size) =
             Self::flatten_array_type(type_info, 0);
 
@@ -591,5 +596,101 @@ impl ElfParser {
                 ctx,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{StructMember, TypeEncoding};
+
+    fn expand_single(name: &str, address: u64, type_info: TypeInfo) -> A2lEntryStore {
+        let var = Variable::new(
+            name.to_string(),
+            address,
+            type_info.size,
+            type_info.name.clone(),
+            type_info,
+        );
+        ElfParser::expand_all_entries(&[var], &HashMap::new())
+    }
+
+    #[test]
+    fn expands_nested_enum_array_to_leaf_elements() {
+        let enum_type = TypeInfo::enum_type(
+            "FaultId".to_string(),
+            1,
+            TypeEncoding::Unsigned,
+            Vec::new(),
+            0x10,
+        );
+        let inner = TypeInfo::array_type("array[3]".to_string(), 3, enum_type, vec![3], 0x20);
+        let outer = TypeInfo::array_type("array[2]".to_string(), 6, inner, vec![2], 0x30);
+
+        let store = expand_single("Cfg", 0x1000, outer);
+
+        assert_eq!(store.len(), 6);
+        assert_eq!(store.entries[0].full_name, "Cfg._0_._0_");
+        assert_eq!(store.entries[0].address, 0x1000);
+        assert_eq!(store.entries[5].full_name, "Cfg._1_._2_");
+        assert_eq!(store.entries[5].address, 0x1005);
+    }
+
+    #[test]
+    fn expands_bitfield_struct_array_with_container_and_members() {
+        let value = StructMember::new(
+            "FltDebValue".to_string(),
+            0,
+            "unsigned short int".to_string(),
+            2,
+        )
+        .with_bitfield(0, 14, true);
+        let status = StructMember::new(
+            "CurrentDebStatus".to_string(),
+            1,
+            "unsigned char".to_string(),
+            1,
+        )
+        .with_bitfield(14, 2, true);
+        let elem = TypeInfo::struct_type("FaultDebounce".to_string(), 2, vec![value, status], 0x40);
+        let array = TypeInfo::array_type("array[2]".to_string(), 4, elem, vec![2], 0x50);
+
+        let store = expand_single("Fault", 0x2000, array);
+
+        assert_eq!(store.len(), 6);
+        assert_eq!(store.entries[0].full_name, "Fault._0_");
+        assert_eq!(store.entries[1].full_name, "Fault._0_.FltDebValue");
+        assert_eq!(store.entries[1].bit_offset, Some(0));
+        assert_eq!(store.entries[1].bit_size, Some(14));
+        assert_eq!(store.entries[2].full_name, "Fault._0_.CurrentDebStatus");
+        assert_eq!(store.entries[2].bit_offset, Some(14));
+        assert_eq!(store.entries[3].full_name, "Fault._1_");
+        assert_eq!(store.entries[3].address, 0x2002);
+    }
+
+    #[test]
+    fn expands_plain_struct_array_without_container_entries() {
+        let mut member = StructMember::new("Value".to_string(), 0, "uint16_t".to_string(), 2);
+        member.type_offset = Some(0x60);
+        let member_type = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        let elem = TypeInfo::struct_type("Plain".to_string(), 2, vec![member], 0x70);
+        let array = TypeInfo::array_type("array[2]".to_string(), 4, elem, vec![2], 0x80);
+        let var = Variable::new(
+            "PlainArray".to_string(),
+            0x3000,
+            4,
+            "array[2]".to_string(),
+            array,
+        );
+        let mut type_cache = HashMap::new();
+        type_cache.insert(0x60, member_type);
+
+        let store = ElfParser::expand_all_entries(&[var], &type_cache);
+
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.entries[0].full_name, "PlainArray._0_.Value");
+        assert_eq!(store.entries[0].address, 0x3000);
+        assert_eq!(store.entries[1].full_name, "PlainArray._1_.Value");
+        assert_eq!(store.entries[1].address, 0x3002);
     }
 }
