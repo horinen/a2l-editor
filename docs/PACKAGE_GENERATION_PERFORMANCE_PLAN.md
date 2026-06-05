@@ -272,6 +272,20 @@ Optimized real ELF result:
 
 Validation result unchanged: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries.
 
+### max_stack_depth update relocation negative record
+
+Tried moving `max_stack_depth` accounting out of the per-DIE loop and into the four composite push paths. The change preserves the intended diagnostic meaning and removes one tiny operation from each DIE visit, but the real ELF run was slower rather than faster.
+
+Real ELF result for the reverted attempt:
+
+- DWARF parse total: 33.554 s
+  - DWARF DIE traversal: 16.783 s
+  - TypeResolver: 16.740 s
+- parse subtotal: 34.417 s
+- generation total: 35.499 s
+
+Validation result remained correct: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries. Because it did not improve the 34.651 s baseline, the code change was reverted and only this negative result is retained.
+
 ### 当前最终基线
 
 截至本轮优化后的最终验证结果：
