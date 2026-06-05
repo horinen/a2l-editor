@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use gimli::{EndianSlice, RunTimeEndian};
 use object::{Object, ObjectSection};
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 type DwarfReader = EndianSlice<'static, RunTimeEndian>;
 
@@ -93,6 +94,15 @@ struct ResolvedType {
     alias_offsets: Vec<u64>,
 }
 
+#[derive(Default)]
+struct MemberAttrs {
+    name: Option<String>,
+    offset: usize,
+    size: usize,
+    type_offset: u64,
+    bitfield_info: Option<(usize, usize, bool)>,
+}
+
 struct TypeResolver;
 
 impl TypeResolver {
@@ -100,11 +110,31 @@ impl TypeResolver {
         type_cache: &mut HashMap<u64, TypeInfo>,
         type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
-    ) {
+    ) -> TypeResolverTiming {
+        let array_start = Instant::now();
         Self::resolve_array_element_types(type_cache, type_refs, array_elem_offsets);
-        Self::resolve_alias_chains(type_cache, type_refs, array_elem_offsets);
-        Self::resolve_member_types(type_cache, type_refs, array_elem_offsets);
+        let array_elements = array_start.elapsed();
+
+        let alias_start = Instant::now();
+        let alias_stats = Self::resolve_alias_chains(type_cache, type_refs, array_elem_offsets);
+        let alias_chains = alias_start.elapsed();
+
+        let member_start = Instant::now();
+        let member_stats = Self::resolve_member_types(type_cache, type_refs, array_elem_offsets);
+        let member_types = member_start.elapsed();
+
+        let bitfield_start = Instant::now();
         Self::normalize_bitfield_offsets(type_cache);
+        let bitfields = bitfield_start.elapsed();
+
+        TypeResolverTiming {
+            array_elements,
+            alias_chains,
+            member_types,
+            bitfields,
+            member_stats,
+            alias_stats,
+        }
     }
 
     fn flatten_resolved_alias(
@@ -121,7 +151,10 @@ impl TypeResolver {
         type_cache: &mut HashMap<u64, TypeInfo>,
         type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
-    ) {
+    ) -> MemberResolverStats {
+        let mut stats = MemberResolverStats::default();
+        let mut unique_type_offsets = HashSet::new();
+        let mut member_type_cache: HashMap<u64, Option<(String, usize)>> = HashMap::new();
         let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = type_cache
             .iter()
             .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
@@ -136,24 +169,34 @@ impl TypeResolver {
                             return None;
                         }
 
-                        let mut visiting = HashSet::new();
-                        Self::resolve_type_by_offset(
-                            type_cache,
-                            type_refs,
-                            array_elem_offsets,
-                            type_offset,
-                            &mut visiting,
-                        )
-                        .map(|resolved| (idx, resolved.flat.name, resolved.flat.size))
+                        stats.members_with_type_offset += 1;
+                        unique_type_offsets.insert(type_offset);
+                        let cached = member_type_cache.entry(type_offset).or_insert_with(|| {
+                            let mut visiting = HashSet::new();
+                            Self::resolve_type_by_offset(
+                                type_cache,
+                                type_refs,
+                                array_elem_offsets,
+                                type_offset,
+                                &mut visiting,
+                            )
+                            .map(|resolved| (resolved.flat.name, resolved.flat.size))
+                        });
+                        cached
+                            .clone()
+                            .map(|(type_name, type_size)| (idx, type_name, type_size))
                     })
                     .collect();
                 (*offset, member_updates)
             })
             .collect();
 
+        stats.unique_type_offsets = unique_type_offsets.len();
+
         for (offset, updates) in resolutions {
             if let Some(type_info) = type_cache.get_mut(&offset) {
                 for (idx, type_name, type_size) in updates {
+                    stats.member_updates += 1;
                     let member = &mut type_info.members[idx];
                     member.type_name = type_name;
                     if member.type_size == 0 {
@@ -162,13 +205,19 @@ impl TypeResolver {
                 }
             }
         }
+
+        stats
     }
 
     fn resolve_alias_chains(
         type_cache: &mut HashMap<u64, TypeInfo>,
         type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
-    ) {
+    ) -> AliasResolverStats {
+        let mut stats = AliasResolverStats {
+            aliases: type_refs.len(),
+            ..AliasResolverStats::default()
+        };
         let updates: Vec<(u64, TypeInfo)> = type_refs
             .keys()
             .filter_map(|from_offset| {
@@ -181,14 +230,18 @@ impl TypeResolver {
                     *from_offset,
                     &mut visiting,
                 )?;
+                stats.resolved += 1;
 
                 if target.flat.size == 0 {
+                    stats.zero_size += 1;
                     return None;
                 }
                 if current.size > 0 && Self::same_resolved_type(current, &target.flat) {
+                    stats.same_resolved += 1;
                     return None;
                 }
 
+                stats.updates += 1;
                 Some((*from_offset, target.flat))
             })
             .collect();
@@ -199,6 +252,8 @@ impl TypeResolver {
                 *type_info = Self::flatten_resolved_alias(target_type, own_name, from_offset);
             }
         }
+
+        stats
     }
 
     fn resolve_array_element_types(
@@ -385,12 +440,13 @@ impl TypeResolver {
 
 pub struct DwarfParser {
     type_cache: HashMap<u64, TypeInfo>,
-    struct_map: HashMap<String, TypeInfo>,
+    struct_map: HashMap<String, u64>,
     variable_types: HashMap<String, u64>,
     global_variables: Vec<DwarfVariable>,
     array_elem_offsets: HashMap<u64, u64>,
     type_refs: HashMap<u64, u64>,
     stats: DwarfStats,
+    timings: DwarfTiming,
     big_endian: bool,
     debug_str: Option<&'static [u8]>,
 }
@@ -409,6 +465,69 @@ pub struct DwarfStats {
     pub enum_values: usize,
 }
 
+#[derive(Default, Clone)]
+pub struct DwarfTiming {
+    pub die_traversal: Duration,
+    pub type_resolver: Duration,
+    pub resolver_detail: TypeResolverTiming,
+    pub traversal_stats: DwarfTraversalStats,
+}
+
+#[derive(Default, Clone)]
+pub struct TypeResolverTiming {
+    pub array_elements: Duration,
+    pub alias_chains: Duration,
+    pub member_types: Duration,
+    pub bitfields: Duration,
+    pub member_stats: MemberResolverStats,
+    pub alias_stats: AliasResolverStats,
+}
+
+#[derive(Default, Clone)]
+pub struct MemberResolverStats {
+    pub members_with_type_offset: usize,
+    pub unique_type_offsets: usize,
+    pub member_updates: usize,
+}
+
+#[derive(Default, Clone)]
+pub struct AliasResolverStats {
+    pub aliases: usize,
+    pub resolved: usize,
+    pub zero_size: usize,
+    pub same_resolved: usize,
+    pub updates: usize,
+}
+
+#[derive(Default, Clone)]
+pub struct DwarfTraversalStats {
+    pub units: usize,
+    pub dies: usize,
+    pub base_types: usize,
+    pub structs: usize,
+    pub unions: usize,
+    pub enums: usize,
+    pub arrays: usize,
+    pub pointers: usize,
+    pub typedefs: usize,
+    pub const_types: usize,
+    pub volatile_types: usize,
+    pub variables: usize,
+    pub members: usize,
+    pub enumerators: usize,
+    pub subranges: usize,
+    pub other_tags: usize,
+    pub composites_saved: usize,
+    pub max_stack_depth: usize,
+    pub name_attrs: usize,
+    pub inline_names: usize,
+    pub inline_name_cache_hits: usize,
+    pub inline_name_cache_misses: usize,
+    pub debug_str_refs: usize,
+    pub debug_str_cache_hits: usize,
+    pub debug_str_cache_misses: usize,
+}
+
 impl DwarfParser {
     pub fn new() -> Self {
         Self {
@@ -419,6 +538,7 @@ impl DwarfParser {
             array_elem_offsets: HashMap::new(),
             type_refs: HashMap::new(),
             stats: DwarfStats::default(),
+            timings: DwarfTiming::default(),
             big_endian: false,
             debug_str: None,
         }
@@ -492,7 +612,9 @@ impl DwarfParser {
 
         let mut iter = debug_info.units();
 
+        let traversal_start = Instant::now();
         while let Some(header) = iter.next().context("遍历 DWARF 单元失败")? {
+            self.timings.traversal_stats.units += 1;
             match header.abbreviations(&debug_abbrev) {
                 Ok(abbrevs) => {
                     self.parse_unit_types(&header, &abbrevs)?;
@@ -500,12 +622,15 @@ impl DwarfParser {
                 Err(_) => continue,
             }
         }
+        self.timings.die_traversal = traversal_start.elapsed();
 
-        TypeResolver::resolve(
+        let resolver_start = Instant::now();
+        self.timings.resolver_detail = TypeResolver::resolve(
             &mut self.type_cache,
             &self.type_refs,
             &self.array_elem_offsets,
         );
+        self.timings.type_resolver = resolver_start.elapsed();
         Ok(())
     }
 
@@ -526,6 +651,12 @@ impl DwarfParser {
 
         while let Some((delta, entry)) = cursor.next_dfs().context("遍历 DIE 失败")? {
             current_depth += delta;
+            self.timings.traversal_stats.dies += 1;
+            self.timings.traversal_stats.max_stack_depth = self
+                .timings
+                .traversal_stats
+                .max_stack_depth
+                .max(composite_stack.len());
             let global_offset = unit_offset + entry.offset().0;
 
             while let Some(top) = composite_stack.last() {
@@ -539,9 +670,11 @@ impl DwarfParser {
 
             match entry.tag() {
                 gimli::constants::DW_TAG_base_type => {
+                    self.timings.traversal_stats.base_types += 1;
                     self.parse_base_type_with_offset(entry, global_offset);
                 }
                 gimli::constants::DW_TAG_structure_type => {
+                    self.timings.traversal_stats.structs += 1;
                     let builder = CompositeBuilder::new(
                         TypeKind::Struct,
                         global_offset as u64,
@@ -555,6 +688,7 @@ impl DwarfParser {
                     );
                 }
                 gimli::constants::DW_TAG_union_type => {
+                    self.timings.traversal_stats.unions += 1;
                     let builder =
                         CompositeBuilder::new(TypeKind::Union, global_offset as u64, current_depth);
                     composite_stack.push(builder);
@@ -565,6 +699,7 @@ impl DwarfParser {
                     );
                 }
                 gimli::constants::DW_TAG_enumeration_type => {
+                    self.timings.traversal_stats.enums += 1;
                     let builder =
                         CompositeBuilder::new(TypeKind::Enum, global_offset as u64, current_depth);
                     composite_stack.push(builder);
@@ -575,6 +710,7 @@ impl DwarfParser {
                     );
                 }
                 gimli::constants::DW_TAG_array_type => {
+                    self.timings.traversal_stats.arrays += 1;
                     let builder =
                         CompositeBuilder::new(TypeKind::Array, global_offset as u64, current_depth);
                     let elem_type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
@@ -589,21 +725,27 @@ impl DwarfParser {
                     }
                 }
                 gimli::constants::DW_TAG_pointer_type => {
+                    self.timings.traversal_stats.pointers += 1;
                     self.parse_pointer_type_with_offset(entry, global_offset);
                 }
                 gimli::constants::DW_TAG_typedef => {
+                    self.timings.traversal_stats.typedefs += 1;
                     self.parse_typedef_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_const_type => {
+                    self.timings.traversal_stats.const_types += 1;
                     self.parse_const_type_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_volatile_type => {
+                    self.timings.traversal_stats.volatile_types += 1;
                     self.parse_volatile_type_with_offset(entry, global_offset, unit_offset);
                 }
                 gimli::constants::DW_TAG_variable => {
+                    self.timings.traversal_stats.variables += 1;
                     self.parse_variable(entry, unit_offset);
                 }
                 gimli::constants::DW_TAG_member => {
+                    self.timings.traversal_stats.members += 1;
                     self.stats.struct_members += 1;
                     if let Some(parent) = composite_stack.last_mut() {
                         if parent.kind == TypeKind::Struct || parent.kind == TypeKind::Union {
@@ -614,6 +756,7 @@ impl DwarfParser {
                     }
                 }
                 gimli::constants::DW_TAG_enumerator => {
+                    self.timings.traversal_stats.enumerators += 1;
                     self.stats.enum_values += 1;
                     if let Some(parent) = composite_stack.last_mut() {
                         if parent.kind == TypeKind::Enum {
@@ -626,6 +769,7 @@ impl DwarfParser {
                     }
                 }
                 gimli::constants::DW_TAG_subrange_type => {
+                    self.timings.traversal_stats.subranges += 1;
                     if let Some(parent) = composite_stack.last_mut() {
                         if parent.kind == TypeKind::Array {
                             if let Some(dim) = Self::get_array_dimension(entry) {
@@ -634,7 +778,9 @@ impl DwarfParser {
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    self.timings.traversal_stats.other_tags += 1;
+                }
             }
         }
 
@@ -669,33 +815,76 @@ impl DwarfParser {
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         unit_offset: usize,
     ) -> Option<StructMember> {
-        let name = self.get_name(entry).unwrap_or_else(|| "_".to_string());
-        let offset = Self::get_member_location_static(entry);
-        let size = Self::get_size_static(entry);
-        let (type_offset, is_unit_ref) = Self::get_type_offset_info_static(entry);
-        let global_type_offset = if type_offset > 0 {
-            if is_unit_ref {
-                unit_offset + type_offset as usize
-            } else {
-                type_offset as usize
-            }
-        } else {
-            0
-        };
+        let attrs = self.parse_member_attrs(entry, unit_offset);
+        let name = attrs.name.unwrap_or_else(|| "_".to_string());
+        let mut member = StructMember::new(name, attrs.offset, "unknown".to_string(), attrs.size)
+            .with_type_offset(attrs.type_offset);
 
-        let bitfield_info = Self::get_bitfield_info_static(entry);
-
-        let mut member = StructMember::new(name, offset, "unknown".to_string(), size)
-            .with_type_offset(global_type_offset as u64);
-
-        if let Some((bit_offset, bit_size, is_absolute)) = bitfield_info {
+        if let Some((bit_offset, bit_size, is_absolute)) = attrs.bitfield_info {
             member = member.with_bitfield(bit_offset, bit_size, is_absolute);
         }
 
         Some(member)
     }
 
+    fn parse_member_attrs(
+        &mut self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+        unit_offset: usize,
+    ) -> MemberAttrs {
+        let mut result = MemberAttrs::default();
+        let mut bit_size = None;
+        let mut bit_offset = None;
+        let mut data_bit_offset = None;
+        let mut attrs = entry.attrs();
+
+        while let Ok(Some(attr)) = attrs.next() {
+            match attr.name() {
+                gimli::constants::DW_AT_name => {
+                    result.name = self.name_from_attr_value(attr.value());
+                }
+                gimli::constants::DW_AT_data_member_location => {
+                    result.offset =
+                        Self::member_location_from_attr_value(attr.value()).unwrap_or(0);
+                }
+                gimli::constants::DW_AT_byte_size => {
+                    result.size = Self::usize_from_attr_value(attr.value()).unwrap_or(0);
+                }
+                gimli::constants::DW_AT_type => match attr.value() {
+                    gimli::AttributeValue::UnitRef(r) => {
+                        result.type_offset = (unit_offset + r.0) as u64;
+                    }
+                    gimli::AttributeValue::DebugInfoRef(r) => {
+                        result.type_offset = r.0 as u64;
+                    }
+                    _ => {}
+                },
+                gimli::constants::DW_AT_bit_size => {
+                    bit_size = Self::usize_from_attr_value(attr.value());
+                }
+                gimli::constants::DW_AT_bit_offset => {
+                    bit_offset = Self::usize_from_attr_value(attr.value());
+                }
+                gimli::constants::DW_AT_data_bit_offset => {
+                    data_bit_offset = Self::usize_from_attr_value(attr.value());
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(bit_size) = bit_size {
+            result.bitfield_info = if let Some(data_bit_offset) = data_bit_offset {
+                Some((data_bit_offset, bit_size, true))
+            } else {
+                Some((bit_offset.unwrap_or(0), bit_size, false))
+            };
+        }
+
+        result
+    }
+
     fn save_composite_type(&mut self, builder: CompositeBuilder, _unit_offset: usize) {
+        self.timings.traversal_stats.composites_saved += 1;
         match builder.kind {
             TypeKind::Struct => {
                 self.stats.structs += 1;
@@ -721,8 +910,7 @@ impl DwarfParser {
 
         if kind == TypeKind::Struct || kind == TypeKind::Union {
             if let Some(named) = original_name {
-                self.struct_map
-                    .insert(named, self.type_cache.get(&offset).unwrap().clone());
+                self.struct_map.insert(named, offset);
             }
         }
     }
@@ -999,18 +1187,66 @@ impl DwarfParser {
         self.type_cache.len()
     }
 
-    fn get_name(&self, entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<String> {
+    fn name_from_attr_value(
+        &mut self,
+        value: gimli::AttributeValue<DwarfReader>,
+    ) -> Option<String> {
+        self.timings.traversal_stats.name_attrs += 1;
+        match value {
+            gimli::AttributeValue::String(s) => {
+                self.timings.traversal_stats.inline_names += 1;
+                Some(String::from_utf8_lossy(&s).to_string())
+            }
+            gimli::AttributeValue::DebugStrRef(offset) => {
+                self.timings.traversal_stats.debug_str_refs += 1;
+                self.read_debug_str(offset.0 as usize)
+            }
+            _ => None,
+        }
+    }
+
+    fn usize_from_attr_value(value: gimli::AttributeValue<DwarfReader>) -> Option<usize> {
+        match value {
+            gimli::AttributeValue::Udata(v) => Some(v as usize),
+            gimli::AttributeValue::Data1(v) => Some(v as usize),
+            gimli::AttributeValue::Data2(v) => Some(v as usize),
+            gimli::AttributeValue::Data4(v) => Some(v as usize),
+            gimli::AttributeValue::Data8(v) => Some(v as usize),
+            gimli::AttributeValue::Sdata(v) => Some(v as usize),
+            _ => None,
+        }
+    }
+
+    fn member_location_from_attr_value(value: gimli::AttributeValue<DwarfReader>) -> Option<usize> {
+        match value {
+            gimli::AttributeValue::Block(block) => {
+                if block.len() >= 2 && block[0] == 0x23 {
+                    Some(Self::read_uleb128(&block[1..]))
+                } else {
+                    None
+                }
+            }
+            gimli::AttributeValue::Exprloc(expr) => {
+                let data = &expr.0;
+                if data.len() >= 2 && data[0] == 0x23 {
+                    Some(Self::read_uleb128(&data[1..]))
+                } else {
+                    None
+                }
+            }
+            other => Self::usize_from_attr_value(other),
+        }
+    }
+
+    fn get_name(
+        &mut self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+    ) -> Option<String> {
         entry
             .attr(gimli::constants::DW_AT_name)
             .ok()
             .flatten()
-            .and_then(|attr| match attr.value() {
-                gimli::AttributeValue::String(s) => Some(String::from_utf8_lossy(&s).to_string()),
-                gimli::AttributeValue::DebugStrRef(offset) => {
-                    self.read_debug_str(offset.0 as usize)
-                }
-                _ => None,
-            })
+            .and_then(|attr| self.name_from_attr_value(attr.value()))
     }
 
     fn read_debug_str(&self, offset: usize) -> Option<String> {
@@ -1074,38 +1310,6 @@ impl DwarfParser {
         result
     }
 
-    fn get_member_location_static(entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> usize {
-        entry
-            .attr(gimli::constants::DW_AT_data_member_location)
-            .ok()
-            .flatten()
-            .and_then(|attr| match attr.value() {
-                gimli::AttributeValue::Udata(v) => Some(v as usize),
-                gimli::AttributeValue::Data1(v) => Some(v as usize),
-                gimli::AttributeValue::Data2(v) => Some(v as usize),
-                gimli::AttributeValue::Data4(v) => Some(v as usize),
-                gimli::AttributeValue::Data8(v) => Some(v as usize),
-                gimli::AttributeValue::Sdata(v) => Some(v as usize),
-                gimli::AttributeValue::Block(block) => {
-                    if block.len() >= 2 && block[0] == 0x23 {
-                        Some(Self::read_uleb128(&block[1..]))
-                    } else {
-                        None
-                    }
-                }
-                gimli::AttributeValue::Exprloc(expr) => {
-                    let data = &expr.0;
-                    if data.len() >= 2 && data[0] == 0x23 {
-                        Some(Self::read_uleb128(&data[1..]))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            })
-            .unwrap_or(0)
-    }
-
     fn get_type_offset_with_unit(
         entry: &gimli::DebuggingInformationEntry<DwarfReader>,
         unit_offset: usize,
@@ -1122,62 +1326,12 @@ impl DwarfParser {
             .unwrap_or(0)
     }
 
-    fn get_type_offset_info_static(
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-    ) -> (u64, bool) {
-        if let Some(attr) = entry.attr(gimli::constants::DW_AT_type).ok().flatten() {
-            match attr.value() {
-                gimli::AttributeValue::UnitRef(r) => return (r.0 as u64, true),
-                gimli::AttributeValue::DebugInfoRef(r) => return (r.0 as u64, false),
-                _ => {}
-            }
-        }
-        (0, false)
-    }
-
-    fn get_bitfield_info_static(
-        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
-    ) -> Option<(usize, usize, bool)> {
-        let bit_size = entry
-            .attr(gimli::constants::DW_AT_bit_size)
-            .ok()
-            .flatten()
-            .and_then(|attr| match attr.value() {
-                gimli::AttributeValue::Udata(v) => Some(v as usize),
-                gimli::AttributeValue::Data1(v) => Some(v as usize),
-                gimli::AttributeValue::Data2(v) => Some(v as usize),
-                gimli::AttributeValue::Data4(v) => Some(v as usize),
-                gimli::AttributeValue::Data8(v) => Some(v as usize),
-                gimli::AttributeValue::Sdata(v) => Some(v as usize),
-                _ => None,
-            })?;
-
-        let read_attr = |attr_name| {
-            entry
-                .attr(attr_name)
-                .ok()
-                .flatten()
-                .and_then(|attr| match attr.value() {
-                    gimli::AttributeValue::Udata(v) => Some(v as usize),
-                    gimli::AttributeValue::Data1(v) => Some(v as usize),
-                    gimli::AttributeValue::Data2(v) => Some(v as usize),
-                    gimli::AttributeValue::Data4(v) => Some(v as usize),
-                    gimli::AttributeValue::Data8(v) => Some(v as usize),
-                    gimli::AttributeValue::Sdata(v) => Some(v as usize),
-                    _ => None,
-                })
-        };
-
-        if let Some(data_bit_offset) = read_attr(gimli::constants::DW_AT_data_bit_offset) {
-            return Some((data_bit_offset, bit_size, true));
-        }
-
-        let bit_offset = read_attr(gimli::constants::DW_AT_bit_offset).unwrap_or(0);
-        Some((bit_offset, bit_size, false))
-    }
-
     pub fn debug_member_type(&self, struct_name: &str) {
-        if let Some(type_info) = self.struct_map.get(struct_name) {
+        if let Some(type_info) = self
+            .struct_map
+            .get(struct_name)
+            .and_then(|offset| self.type_cache.get(offset))
+        {
             println!("结构体: {}", struct_name);
             for member in &type_info.members {
                 println!(
@@ -1233,6 +1387,10 @@ impl DwarfParser {
         &self.type_cache
     }
 
+    pub fn timings(&self) -> &DwarfTiming {
+        &self.timings
+    }
+
     pub fn type_count(&self) -> usize {
         self.type_cache.len()
     }
@@ -1274,7 +1432,9 @@ impl DwarfParser {
     }
 
     pub fn find_struct_by_name(&self, name: &str) -> Option<&TypeInfo> {
-        self.struct_map.get(name)
+        self.struct_map
+            .get(name)
+            .and_then(|offset| self.type_cache.get(offset))
     }
 
     pub fn find_structs_containing_member(
@@ -1285,7 +1445,11 @@ impl DwarfParser {
         let search_lower = member_name.to_lowercase();
 
         // 首先尝试精确匹配
-        for type_info in self.struct_map.values() {
+        for type_info in self
+            .struct_map
+            .values()
+            .filter_map(|offset| self.type_cache.get(offset))
+        {
             if !type_info.members.is_empty() {
                 for member in &type_info.members {
                     let member_lower = member.name.to_lowercase();
@@ -1298,7 +1462,11 @@ impl DwarfParser {
 
         // 如果精确匹配没有结果，尝试包含匹配
         if results.is_empty() {
-            for type_info in self.struct_map.values() {
+            for type_info in self
+                .struct_map
+                .values()
+                .filter_map(|offset| self.type_cache.get(offset))
+            {
                 if !type_info.members.is_empty() {
                     for member in &type_info.members {
                         let member_lower = member.name.to_lowercase();
@@ -1314,7 +1482,10 @@ impl DwarfParser {
     }
 
     pub fn list_structs(&self) -> Vec<&TypeInfo> {
-        self.struct_map.values().collect()
+        self.struct_map
+            .values()
+            .filter_map(|offset| self.type_cache.get(offset))
+            .collect()
     }
 
     pub fn list_variables_with_types(&self) -> Vec<(String, String)> {
@@ -1509,7 +1680,7 @@ mod tests {
         );
         parser.array_elem_offsets.insert(array_offset, const_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1568,7 +1739,7 @@ mod tests {
             .array_elem_offsets
             .insert(outer_array_offset, inner_array_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1607,7 +1778,7 @@ mod tests {
             child_offset = array_offset;
         }
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1676,7 +1847,7 @@ mod tests {
         parser.type_cache.insert(const_offset, const_type);
         parser.type_refs.insert(const_offset, outer_array_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1731,7 +1902,7 @@ mod tests {
             .array_elem_offsets
             .insert(array_offset, struct_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1780,7 +1951,7 @@ mod tests {
         );
         parser.array_elem_offsets.insert(array_offset, enum_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1835,7 +2006,7 @@ mod tests {
             TypeInfo::struct_type("Config".to_string(), 6, vec![member], struct_offset),
         );
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1873,7 +2044,7 @@ mod tests {
             parser.type_refs.insert(alias_offset, next_offset);
         }
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -1968,7 +2139,7 @@ mod tests {
         parser.type_cache.insert(alias_offset, alias);
         parser.type_refs.insert(alias_offset, target_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -2000,7 +2171,7 @@ mod tests {
         parser.type_refs.insert(first_offset, second_offset);
         parser.type_refs.insert(second_offset, first_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -2079,7 +2250,7 @@ mod tests {
         parser.type_refs.insert(alias_offset, array_offset);
         parser.array_elem_offsets.insert(array_offset, alias_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -2107,7 +2278,7 @@ mod tests {
         );
         parser.array_elem_offsets.insert(array_offset, array_offset);
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -2130,7 +2301,7 @@ mod tests {
             TypeInfo::struct_type("HasMissing".to_string(), 1, vec![member], struct_offset),
         );
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,
@@ -2153,7 +2324,7 @@ mod tests {
             TypeInfo::struct_type("StatusBits".to_string(), 2, vec![member], struct_offset),
         );
 
-        TypeResolver::resolve(
+        let _ = TypeResolver::resolve(
             &mut parser.type_cache,
             &parser.type_refs,
             &parser.array_elem_offsets,

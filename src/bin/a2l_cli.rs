@@ -1,10 +1,10 @@
 use a2l_editor::{
     A2lEntryStore, A2lGenerator, DataPackage, DwarfParser, ElfParser, Endianness, ExportKind,
-    TypeInfo, TypeKind,
+    GenerationProfile, TypeInfo, TypeKind,
 };
 use anyhow::Result;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -109,6 +109,101 @@ fn print_usage() {
     println!("    --offset 0xHH           查看指定偏移处的类型");
 }
 
+fn format_duration(duration: Duration) -> String {
+    let millis = duration.as_millis();
+    if millis >= 1000 {
+        format!("{:.3} s", duration.as_secs_f64())
+    } else {
+        format!("{} ms", millis)
+    }
+}
+
+fn print_generation_profile(profile: &GenerationProfile, package_save: Duration) {
+    println!();
+    println!("=== 首次生成耗时分布 ===");
+    println!(
+        "ELF/object parse: {}",
+        format_duration(profile.elf_object_parse)
+    );
+    println!(
+        "DWARF parse 总计: {}",
+        format_duration(profile.dwarf_parse_total)
+    );
+    println!(
+        "  DWARF DIE 遍历: {}",
+        format_duration(profile.dwarf_die_traversal)
+    );
+    println!(
+        "    DIE stats: {} units, {} DIEs, {} members, {} variables, {} composites, {} other",
+        profile.dwarf_units,
+        profile.dwarf_dies,
+        profile.dwarf_members,
+        profile.dwarf_variables,
+        profile.dwarf_composites_saved,
+        profile.dwarf_other_tags
+    );
+    println!(
+        "    name stats: {} attrs, {} inline hits, {} inline misses, {} debug_str refs",
+        profile.dwarf_name_attrs,
+        profile.dwarf_inline_name_cache_hits,
+        profile.dwarf_inline_name_cache_misses,
+        profile.dwarf_debug_str_refs
+    );
+    println!("  TypeResolver: {}", format_duration(profile.type_resolver));
+    println!(
+        "    array element types: {}",
+        format_duration(profile.resolver_array_elements)
+    );
+    println!(
+        "    alias chains: {}",
+        format_duration(profile.resolver_alias_chains)
+    );
+    println!(
+        "    alias stats: {} aliases, {} resolved, {} zero-size, {} same, {} updates",
+        profile.resolver_alias_count,
+        profile.resolver_alias_resolved,
+        profile.resolver_alias_zero_size,
+        profile.resolver_alias_same_resolved,
+        profile.resolver_alias_updates
+    );
+    println!(
+        "    member types: {}",
+        format_duration(profile.resolver_member_types)
+    );
+    println!(
+        "    bitfield normalize: {}",
+        format_duration(profile.resolver_bitfields)
+    );
+    println!(
+        "    member stats: {} members, {} unique type offsets, {} updates",
+        profile.resolver_member_count,
+        profile.resolver_member_unique_type_offsets,
+        profile.resolver_member_updates
+    );
+    println!("变量提取: {}", format_duration(profile.variable_extraction));
+    println!(
+        "type_cache clone: {}",
+        format_duration(profile.type_cache_clone)
+    );
+    println!(
+        "A2L entry 展开: {}",
+        format_duration(profile.a2l_entry_expansion)
+    );
+    println!("数据包序列化/写盘: {}", format_duration(package_save));
+    println!("解析小计: {}", format_duration(profile.total_parse_time()));
+    println!(
+        "生成总计: {}",
+        format_duration(profile.total_parse_time() + package_save)
+    );
+    println!(
+        "计数: 类型 {}, DWARF 变量 {}, 有效变量 {}, A2L 条目 {}",
+        profile.type_count,
+        profile.dwarf_variable_count,
+        profile.variable_count,
+        profile.entry_count
+    );
+}
+
 fn format_size(size: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -157,7 +252,12 @@ fn ensure_package(elf_path: &PathBuf) -> Result<(A2lEntryStore, bool)> {
         );
 
         let mut pkg = DataPackage::create(elf_path)?;
+        let save_start = Instant::now();
         pkg.save_entries(&store)?;
+        let package_save = save_start.elapsed();
+        if let Some(profile) = parser.generation_profile() {
+            print_generation_profile(profile, package_save);
+        }
         let pkg_path = pkg.path().to_path_buf();
         let pkg_size = std::fs::metadata(&pkg_path)?.len();
         println!(
@@ -219,7 +319,12 @@ fn cmd_parse(elf_path: &PathBuf) -> Result<()> {
     );
 
     let mut pkg = DataPackage::create(elf_path)?;
+    let save_start = Instant::now();
     pkg.save_entries(&store)?;
+    let package_save = save_start.elapsed();
+    if let Some(profile) = parser.generation_profile() {
+        print_generation_profile(profile, package_save);
+    }
     let pkg_path = pkg.path().to_path_buf();
     let pkg_size = std::fs::metadata(&pkg_path)?.len();
     println!(

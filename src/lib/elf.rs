@@ -9,15 +9,66 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 pub struct ElfParser {
     variables: Vec<Variable>,
     file_size: u64,
     has_dwarf: bool,
     dwarf_stats: Option<DwarfStats>,
+    profile: Option<GenerationProfile>,
     a2l_entries: Option<A2lEntryStore>,
     #[allow(dead_code)]
     type_cache: Option<HashMap<u64, TypeInfo>>,
+}
+
+#[derive(Clone, Default)]
+pub struct GenerationProfile {
+    pub elf_object_parse: Duration,
+    pub dwarf_parse_total: Duration,
+    pub dwarf_die_traversal: Duration,
+    pub dwarf_units: usize,
+    pub dwarf_dies: usize,
+    pub dwarf_members: usize,
+    pub dwarf_variables: usize,
+    pub dwarf_other_tags: usize,
+    pub dwarf_composites_saved: usize,
+    pub dwarf_name_attrs: usize,
+    pub dwarf_inline_name_cache_hits: usize,
+    pub dwarf_inline_name_cache_misses: usize,
+    pub dwarf_debug_str_refs: usize,
+    pub dwarf_debug_str_cache_hits: usize,
+    pub dwarf_debug_str_cache_misses: usize,
+    pub type_resolver: Duration,
+    pub resolver_array_elements: Duration,
+    pub resolver_alias_chains: Duration,
+    pub resolver_member_types: Duration,
+    pub resolver_bitfields: Duration,
+    pub resolver_alias_count: usize,
+    pub resolver_alias_resolved: usize,
+    pub resolver_alias_zero_size: usize,
+    pub resolver_alias_same_resolved: usize,
+    pub resolver_alias_updates: usize,
+    pub resolver_member_count: usize,
+    pub resolver_member_unique_type_offsets: usize,
+    pub resolver_member_updates: usize,
+    pub variable_extraction: Duration,
+    pub type_cache_clone: Duration,
+    pub a2l_entry_expansion: Duration,
+    pub type_count: usize,
+    pub dwarf_variable_count: usize,
+    pub variable_count: usize,
+    pub entry_count: usize,
+}
+
+impl GenerationProfile {
+    pub fn total_parse_time(&self) -> Duration {
+        self.elf_object_parse
+            + self.dwarf_parse_total
+            + self.variable_extraction
+            + self.type_cache_clone
+            + self.a2l_entry_expansion
+    }
 }
 
 #[derive(Clone)]
@@ -52,6 +103,7 @@ impl ElfParser {
     }
 
     pub fn parse_with_depth(path: &Path, deep: bool) -> Result<Self> {
+        let object_start = Instant::now();
         let file = File::open(path).context("无法打开 ELF 文件")?;
         let metadata = file.metadata().context("无法读取文件元数据")?;
         let file_size = metadata.len();
@@ -59,9 +111,12 @@ impl ElfParser {
         let mmap = unsafe { Mmap::map(&file).context("无法创建内存映射")? };
 
         let obj = object::File::parse(&*mmap).context("无法解析 ELF 文件")?;
+        let elf_object_parse = object_start.elapsed();
 
-        let (variables, has_dwarf, dwarf_stats, type_cache, a2l_entries) = if deep {
+        let (variables, has_dwarf, dwarf_stats, profile, type_cache, a2l_entries) = if deep {
+            let dwarf_start = Instant::now();
             let parser = DwarfParser::parse(&mmap).context("DWARF 解析失败")?;
+            let dwarf_parse_total = dwarf_start.elapsed();
 
             if !parser.has_dwarf_info() {
                 anyhow::bail!("ELF 文件不包含 DWARF 调试信息，深度解析需要 DWARF 数据");
@@ -96,14 +151,82 @@ impl ElfParser {
                 anyhow::bail!("DWARF 中未找到全局变量");
             }
 
+            let variable_start = Instant::now();
             let variables = Self::extract_variables_from_dwarf(&parser);
-            let tc = parser.type_cache().clone();
-            let entries = Self::expand_all_entries(&variables, &tc);
+            let variable_extraction = variable_start.elapsed();
 
-            (variables, true, stats, Some(tc), Some(entries))
+            let type_count = parser.type_cache().len();
+            let expansion_start = Instant::now();
+            let entries = Self::expand_all_entries(&variables, parser.type_cache());
+            let a2l_entry_expansion = expansion_start.elapsed();
+
+            let profile = GenerationProfile {
+                elf_object_parse,
+                dwarf_parse_total,
+                dwarf_die_traversal: parser.timings().die_traversal,
+                dwarf_units: parser.timings().traversal_stats.units,
+                dwarf_dies: parser.timings().traversal_stats.dies,
+                dwarf_members: parser.timings().traversal_stats.members,
+                dwarf_variables: parser.timings().traversal_stats.variables,
+                dwarf_other_tags: parser.timings().traversal_stats.other_tags,
+                dwarf_composites_saved: parser.timings().traversal_stats.composites_saved,
+                dwarf_name_attrs: parser.timings().traversal_stats.name_attrs,
+                dwarf_inline_name_cache_hits: parser
+                    .timings()
+                    .traversal_stats
+                    .inline_name_cache_hits,
+                dwarf_inline_name_cache_misses: parser
+                    .timings()
+                    .traversal_stats
+                    .inline_name_cache_misses,
+                dwarf_debug_str_refs: parser.timings().traversal_stats.debug_str_refs,
+                dwarf_debug_str_cache_hits: parser.timings().traversal_stats.debug_str_cache_hits,
+                dwarf_debug_str_cache_misses: parser
+                    .timings()
+                    .traversal_stats
+                    .debug_str_cache_misses,
+                type_resolver: parser.timings().type_resolver,
+                resolver_array_elements: parser.timings().resolver_detail.array_elements,
+                resolver_alias_chains: parser.timings().resolver_detail.alias_chains,
+                resolver_member_types: parser.timings().resolver_detail.member_types,
+                resolver_bitfields: parser.timings().resolver_detail.bitfields,
+                resolver_alias_count: parser.timings().resolver_detail.alias_stats.aliases,
+                resolver_alias_resolved: parser.timings().resolver_detail.alias_stats.resolved,
+                resolver_alias_zero_size: parser.timings().resolver_detail.alias_stats.zero_size,
+                resolver_alias_same_resolved: parser
+                    .timings()
+                    .resolver_detail
+                    .alias_stats
+                    .same_resolved,
+                resolver_alias_updates: parser.timings().resolver_detail.alias_stats.updates,
+                resolver_member_count: parser
+                    .timings()
+                    .resolver_detail
+                    .member_stats
+                    .members_with_type_offset,
+                resolver_member_unique_type_offsets: parser
+                    .timings()
+                    .resolver_detail
+                    .member_stats
+                    .unique_type_offsets,
+                resolver_member_updates: parser
+                    .timings()
+                    .resolver_detail
+                    .member_stats
+                    .member_updates,
+                variable_extraction,
+                type_cache_clone: Duration::ZERO,
+                a2l_entry_expansion,
+                type_count,
+                dwarf_variable_count: parser.global_variable_count(),
+                variable_count: variables.len(),
+                entry_count: entries.len(),
+            };
+
+            (variables, true, stats, Some(profile), None, Some(entries))
         } else {
             let variables = Self::extract_variables_from_elf(&obj);
-            (variables, false, None, None, None)
+            (variables, false, None, None, None, None)
         };
 
         Ok(Self {
@@ -111,6 +234,7 @@ impl ElfParser {
             file_size,
             has_dwarf,
             dwarf_stats,
+            profile,
             type_cache,
             a2l_entries,
         })
@@ -246,6 +370,10 @@ impl ElfParser {
 
     pub fn dwarf_stats(&self) -> Option<&DwarfStats> {
         self.dwarf_stats.as_ref()
+    }
+
+    pub fn generation_profile(&self) -> Option<&GenerationProfile> {
+        self.profile.as_ref()
     }
 
     pub fn search(&self, pattern: &str) -> Vec<&Variable> {
