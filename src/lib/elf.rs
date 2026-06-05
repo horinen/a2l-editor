@@ -616,6 +616,22 @@ mod tests {
     }
 
     #[test]
+    fn expands_primitive_array_to_leaf_elements() {
+        let elem = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        let array = TypeInfo::array_type("array[3]".to_string(), 6, elem, vec![3], 0x10);
+
+        let store = expand_single("Speeds", 0x1000, array);
+
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.entries[0].full_name, "Speeds._0_");
+        assert_eq!(store.entries[0].address, 0x1000);
+        assert_eq!(store.entries[0].size, 2);
+        assert_eq!(store.entries[0].a2l_type, "UWORD");
+        assert_eq!(store.entries[2].full_name, "Speeds._2_");
+        assert_eq!(store.entries[2].address, 0x1004);
+    }
+
+    #[test]
     fn expands_nested_enum_array_to_leaf_elements() {
         let enum_type = TypeInfo::enum_type(
             "FaultId".to_string(),
@@ -634,6 +650,36 @@ mod tests {
         assert_eq!(store.entries[0].address, 0x1000);
         assert_eq!(store.entries[5].full_name, "Cfg._1_._2_");
         assert_eq!(store.entries[5].address, 0x1005);
+    }
+
+    #[test]
+    fn expands_const_nested_enum_array_to_leaf_elements() {
+        let enum_type = TypeInfo::enum_type(
+            "FaultId".to_string(),
+            1,
+            TypeEncoding::Unsigned,
+            Vec::new(),
+            0x10,
+        );
+        let inner = TypeInfo::array_type("array[6]".to_string(), 6, enum_type, vec![6], 0x20);
+        let mut const_outer =
+            TypeInfo::array_type("const array[4]".to_string(), 24, inner, vec![4], 0x30);
+        const_outer.kind = TypeKind::Array;
+
+        let store = expand_single("Cdd_L9388_WssFaultIdConfigs", 0x801F18AB, const_outer);
+
+        assert_eq!(store.len(), 24);
+        assert_eq!(
+            store.entries[0].full_name,
+            "Cdd_L9388_WssFaultIdConfigs._0_._0_"
+        );
+        assert_eq!(store.entries[0].address, 0x801F18AB);
+        assert_eq!(store.entries[0].size, 1);
+        assert_eq!(
+            store.entries[23].full_name,
+            "Cdd_L9388_WssFaultIdConfigs._3_._5_"
+        );
+        assert_eq!(store.entries[23].address, 0x801F18C2);
     }
 
     #[test]
@@ -669,6 +715,53 @@ mod tests {
     }
 
     #[test]
+    fn expands_nested_bitfield_struct_array_with_containers_and_members() {
+        let value = StructMember::new(
+            "FltDebValue".to_string(),
+            0,
+            "unsigned short int".to_string(),
+            2,
+        )
+        .with_bitfield(0, 14, true);
+        let status = StructMember::new(
+            "CurrentDebStatus".to_string(),
+            1,
+            "unsigned char".to_string(),
+            1,
+        )
+        .with_bitfield(14, 2, true);
+        let elem = TypeInfo::struct_type("FaultDebounce".to_string(), 2, vec![value, status], 0x40);
+        let inner = TypeInfo::array_type("array[23]".to_string(), 46, elem, vec![23], 0x50);
+        let outer = TypeInfo::array_type("array[1]".to_string(), 46, inner, vec![1], 0x60);
+
+        let store = expand_single("Cdd_TLE918X_FaultDebInfo", 0x7000, outer);
+
+        assert_eq!(store.len(), 69);
+        assert_eq!(
+            store.entries[0].full_name,
+            "Cdd_TLE918X_FaultDebInfo._0_._0_"
+        );
+        assert_eq!(store.entries[0].address, 0x7000);
+        assert_eq!(
+            store.entries[1].full_name,
+            "Cdd_TLE918X_FaultDebInfo._0_._0_.FltDebValue"
+        );
+        assert_eq!(
+            store.entries[2].full_name,
+            "Cdd_TLE918X_FaultDebInfo._0_._0_.CurrentDebStatus"
+        );
+        assert_eq!(
+            store.entries[66].full_name,
+            "Cdd_TLE918X_FaultDebInfo._0_._22_"
+        );
+        assert_eq!(store.entries[66].address, 0x702C);
+        assert_eq!(
+            store.entries[68].full_name,
+            "Cdd_TLE918X_FaultDebInfo._0_._22_.CurrentDebStatus"
+        );
+    }
+
+    #[test]
     fn expands_plain_struct_array_without_container_entries() {
         let mut member = StructMember::new("Value".to_string(), 0, "uint16_t".to_string(), 2);
         member.type_offset = Some(0x60);
@@ -692,5 +785,27 @@ mod tests {
         assert_eq!(store.entries[0].address, 0x3000);
         assert_eq!(store.entries[1].full_name, "PlainArray._1_.Value");
         assert_eq!(store.entries[1].address, 0x3002);
+    }
+
+    #[test]
+    fn expands_array_with_unknown_element_type_as_scalar_fallback() {
+        let mut array = TypeInfo::array_type(
+            "array[4]".to_string(),
+            8,
+            TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+            vec![4],
+            0x90,
+        );
+        array.pointer_target = None;
+
+        let store = expand_single("UnknownArray", 0x4000, array);
+
+        assert_eq!(store.len(), 4);
+        assert_eq!(store.entries[0].full_name, "UnknownArray._0_");
+        assert_eq!(store.entries[0].address, 0x4000);
+        assert_eq!(store.entries[0].size, 2);
+        assert_eq!(store.entries[0].a2l_type, "UWORD");
+        assert_eq!(store.entries[3].full_name, "UnknownArray._3_");
+        assert_eq!(store.entries[3].address, 0x4006);
     }
 }
