@@ -86,6 +86,13 @@ impl CompositeBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedType {
+    flat: TypeInfo,
+    real_offset: u64,
+    alias_offsets: Vec<u64>,
+}
+
 struct TypeResolver;
 
 impl TypeResolver {
@@ -94,90 +101,27 @@ impl TypeResolver {
         type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
     ) {
-        Self::resolve_type_graph(type_cache, type_refs);
         Self::resolve_array_element_types(type_cache, type_refs, array_elem_offsets);
-        Self::resolve_alias_chains(type_cache, type_refs);
-        Self::resolve_member_types(type_cache);
+        Self::resolve_alias_chains(type_cache, type_refs, array_elem_offsets);
+        Self::resolve_member_types(type_cache, type_refs, array_elem_offsets);
         Self::normalize_bitfield_offsets(type_cache);
     }
 
-    fn resolve_type_graph(type_cache: &mut HashMap<u64, TypeInfo>, type_refs: &HashMap<u64, u64>) {
-        let refs: Vec<(u64, u64)> = type_refs.iter().map(|(k, v)| (*k, *v)).collect();
-
-        let mut in_deg: HashMap<u64, usize> = HashMap::new();
-        let mut dependents: HashMap<u64, Vec<u64>> = HashMap::new();
-
-        for &(from, to) in &refs {
-            *in_deg.entry(from).or_insert(0) += 1;
-            dependents.entry(to).or_default().push(from);
-        }
-
-        let mut queue: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
-        for &(from, to) in &refs {
-            if type_cache.get(&to).map(|t| t.size > 0).unwrap_or(false)
-                && in_deg.get(&from).copied().unwrap_or(0) == 1
-            {
-                queue.push_back(from);
-            }
-        }
-
-        let mut sorted: Vec<u64> = Vec::new();
-        let mut visited_sort: HashSet<u64> = HashSet::new();
-        while let Some(node) = queue.pop_front() {
-            if visited_sort.contains(&node) {
-                continue;
-            }
-            visited_sort.insert(node);
-            sorted.push(node);
-
-            if let Some(deps) = dependents.get(&node) {
-                for &dep in deps {
-                    let deg = in_deg.get_mut(&dep).unwrap();
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-
-        for offset in &sorted {
-            if let Some(&target_offset) = type_refs.get(offset) {
-                Self::copy_resolved_type(type_cache, *offset, target_offset, true);
-            }
-        }
-
-        for &(from_offset, to_offset) in &refs {
-            if to_offset > 0 {
-                Self::copy_resolved_type(type_cache, from_offset, to_offset, true);
-            }
-        }
+    fn flatten_resolved_alias(
+        mut target: TypeInfo,
+        alias_name: String,
+        alias_offset: u64,
+    ) -> TypeInfo {
+        target.name = alias_name;
+        target.offset = alias_offset;
+        target
     }
 
-    fn copy_resolved_type(
+    fn resolve_member_types(
         type_cache: &mut HashMap<u64, TypeInfo>,
-        from_offset: u64,
-        to_offset: u64,
-        only_empty: bool,
+        type_refs: &HashMap<u64, u64>,
+        array_elem_offsets: &HashMap<u64, u64>,
     ) {
-        let Some(target_type) = type_cache.get(&to_offset).cloned() else {
-            return;
-        };
-        if target_type.size == 0 {
-            return;
-        }
-        if let Some(type_info) = type_cache.get_mut(&from_offset) {
-            if only_empty && type_info.size > 0 {
-                return;
-            }
-            let own_name = type_info.name.clone();
-            *type_info = target_type;
-            type_info.name = own_name;
-            type_info.offset = from_offset;
-        }
-    }
-
-    fn resolve_member_types(type_cache: &mut HashMap<u64, TypeInfo>) {
         let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = type_cache
             .iter()
             .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
@@ -187,15 +131,20 @@ impl TypeResolver {
                     .iter()
                     .enumerate()
                     .filter_map(|(idx, member)| {
-                        member.type_offset.and_then(|type_offset| {
-                            if type_offset > 0 {
-                                type_cache
-                                    .get(&type_offset)
-                                    .map(|resolved| (idx, resolved.name.clone(), resolved.size))
-                            } else {
-                                None
-                            }
-                        })
+                        let type_offset = member.type_offset?;
+                        if type_offset == 0 {
+                            return None;
+                        }
+
+                        let mut visiting = HashSet::new();
+                        Self::resolve_type_by_offset(
+                            type_cache,
+                            type_refs,
+                            array_elem_offsets,
+                            type_offset,
+                            &mut visiting,
+                        )
+                        .map(|resolved| (idx, resolved.flat.name, resolved.flat.size))
                     })
                     .collect();
                 (*offset, member_updates)
@@ -218,39 +167,36 @@ impl TypeResolver {
     fn resolve_alias_chains(
         type_cache: &mut HashMap<u64, TypeInfo>,
         type_refs: &HashMap<u64, u64>,
+        array_elem_offsets: &HashMap<u64, u64>,
     ) {
-        for _ in 0..32 {
-            let refs: Vec<(u64, u64)> = type_refs.iter().map(|(from, to)| (*from, *to)).collect();
-            let mut updates = Vec::new();
+        let updates: Vec<(u64, TypeInfo)> = type_refs
+            .keys()
+            .filter_map(|from_offset| {
+                let current = type_cache.get(from_offset)?;
+                let mut visiting = HashSet::new();
+                let target = Self::resolve_type_by_offset(
+                    type_cache,
+                    type_refs,
+                    array_elem_offsets,
+                    *from_offset,
+                    &mut visiting,
+                )?;
 
-            for (from_offset, to_offset) in refs {
-                let Some(current) = type_cache.get(&from_offset) else {
-                    continue;
-                };
-                let Some(target) = type_cache.get(&to_offset) else {
-                    continue;
-                };
-                if target.size == 0 {
-                    continue;
+                if target.flat.size == 0 {
+                    return None;
                 }
-                if current.size > 0 && Self::same_resolved_type(current, target) {
-                    continue;
+                if current.size > 0 && Self::same_resolved_type(current, &target.flat) {
+                    return None;
                 }
 
-                updates.push((from_offset, target.clone()));
-            }
+                Some((*from_offset, target.flat))
+            })
+            .collect();
 
-            if updates.is_empty() {
-                break;
-            }
-
-            for (from_offset, target_type) in updates {
-                if let Some(type_info) = type_cache.get_mut(&from_offset) {
-                    let own_name = type_info.name.clone();
-                    *type_info = target_type;
-                    type_info.name = own_name;
-                    type_info.offset = from_offset;
-                }
+        for (from_offset, target_type) in updates {
+            if let Some(type_info) = type_cache.get_mut(&from_offset) {
+                let own_name = type_info.name.clone();
+                *type_info = Self::flatten_resolved_alias(target_type, own_name, from_offset);
             }
         }
     }
@@ -265,18 +211,22 @@ impl TypeResolver {
             .filter(|(_, t)| t.kind == TypeKind::Array)
             .filter_map(|(array_offset, _)| {
                 let elem_offset = *array_elem_offsets.get(array_offset)?;
-                if elem_offset == 0 {
+                if elem_offset == 0 || elem_offset == *array_offset {
                     return None;
                 }
                 let mut visiting = HashSet::new();
-                Self::resolve_type_by_offset(
+                let elem_type = Self::resolve_type_by_offset(
                     type_cache,
                     type_refs,
                     array_elem_offsets,
                     elem_offset,
                     &mut visiting,
-                )
-                .map(|elem_type| (*array_offset, elem_type))
+                )?;
+                if elem_type.real_offset == *array_offset {
+                    return None;
+                }
+
+                Some((*array_offset, elem_type.flat))
             })
             .collect();
 
@@ -304,12 +254,16 @@ impl TypeResolver {
         array_elem_offsets: &HashMap<u64, u64>,
         offset: u64,
         visiting: &mut HashSet<u64>,
-    ) -> Option<TypeInfo> {
+    ) -> Option<ResolvedType> {
         if !visiting.insert(offset) {
             return None;
         }
 
-        let mut resolved = type_cache.get(&offset)?.clone();
+        let mut resolved = ResolvedType {
+            flat: type_cache.get(&offset)?.clone(),
+            real_offset: offset,
+            alias_offsets: Vec::new(),
+        };
 
         if let Some(&target_offset) = type_refs.get(&offset) {
             if target_offset > 0 {
@@ -320,15 +274,19 @@ impl TypeResolver {
                     target_offset,
                     visiting,
                 ) {
-                    let own_name = resolved.name.clone();
-                    resolved = target;
-                    resolved.name = own_name;
-                    resolved.offset = offset;
+                    let own_name = resolved.flat.name.clone();
+                    let mut alias_offsets = target.alias_offsets;
+                    alias_offsets.push(offset);
+                    resolved = ResolvedType {
+                        real_offset: target.real_offset,
+                        alias_offsets,
+                        flat: Self::flatten_resolved_alias(target.flat, own_name, offset),
+                    };
                 }
             }
         }
 
-        if resolved.kind == TypeKind::Array {
+        if resolved.flat.kind == TypeKind::Array {
             if let Some(&elem_offset) = array_elem_offsets.get(&offset) {
                 if elem_offset > 0 {
                     if let Some(elem_type) = Self::resolve_type_by_offset(
@@ -338,8 +296,10 @@ impl TypeResolver {
                         elem_offset,
                         visiting,
                     ) {
-                        resolved.encoding = elem_type.encoding;
-                        resolved.pointer_target = Some(Box::new(elem_type));
+                        if elem_type.real_offset != offset && elem_type.flat.size > 0 {
+                            resolved.flat.encoding = elem_type.flat.encoding;
+                            resolved.flat.pointer_target = Some(Box::new(elem_type.flat));
+                        }
                     }
                 }
             }
@@ -1830,6 +1790,355 @@ mod tests {
         let elem = resolved.pointer_target.as_deref().unwrap();
         assert_eq!(elem.variants[0].name, "NewFault");
         assert_eq!(elem.variants[0].value, 2);
+    }
+
+    #[test]
+    fn resolves_member_type_through_alias_to_array() {
+        let mut parser = DwarfParser::new();
+        let elem_offset = 0x10;
+        let array_offset = 0x20;
+        let alias_offset = 0x30;
+        let const_offset = 0x40;
+        let struct_offset = 0x50;
+
+        let mut elem = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        elem.offset = elem_offset;
+        parser.type_cache.insert(elem_offset, elem);
+
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[3]".to_string(),
+                6,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![3],
+                array_offset,
+            ),
+        );
+        parser.array_elem_offsets.insert(array_offset, elem_offset);
+
+        let mut alias = TypeInfo::primitive("SpeedArray".to_string(), 0, TypeEncoding::Unsigned);
+        alias.kind = TypeKind::Typedef;
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, array_offset);
+
+        let mut const_type = TypeInfo::primitive("const".to_string(), 0, TypeEncoding::Unsigned);
+        const_type.offset = const_offset;
+        parser.type_cache.insert(const_offset, const_type);
+        parser.type_refs.insert(const_offset, alias_offset);
+
+        let member = StructMember::new("speeds".to_string(), 0, "unknown".to_string(), 0)
+            .with_type_offset(const_offset);
+        parser.type_cache.insert(
+            struct_offset,
+            TypeInfo::struct_type("Config".to_string(), 6, vec![member], struct_offset),
+        );
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&struct_offset).unwrap();
+        let member = &resolved.members[0];
+        assert_eq!(member.type_name, "const");
+        assert_eq!(member.type_size, 6);
+    }
+
+    #[test]
+    fn resolves_alias_chain_deeper_than_previous_iteration_cap() {
+        let mut parser = DwarfParser::new();
+        let target_offset = 0x10;
+        let first_alias_offset = 0x100;
+        let alias_count = 40;
+
+        let mut target = TypeInfo::primitive("uint32_t".to_string(), 4, TypeEncoding::Unsigned);
+        target.offset = target_offset;
+        parser.type_cache.insert(target_offset, target);
+
+        for i in 0..alias_count {
+            let alias_offset = first_alias_offset + i;
+            let mut alias = TypeInfo::primitive(format!("Alias{}", i), 0, TypeEncoding::Unsigned);
+            alias.kind = TypeKind::Typedef;
+            alias.offset = alias_offset;
+            parser.type_cache.insert(alias_offset, alias);
+
+            let next_offset = if i + 1 == alias_count {
+                target_offset
+            } else {
+                alias_offset + 1
+            };
+            parser.type_refs.insert(alias_offset, next_offset);
+        }
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&first_alias_offset).unwrap();
+        assert_eq!(resolved.name, "Alias0");
+        assert_eq!(resolved.kind, TypeKind::Primitive);
+        assert_eq!(resolved.size, 4);
+        assert_eq!(resolved.encoding, TypeEncoding::Unsigned);
+    }
+
+    #[test]
+    fn resolved_type_for_real_type_has_empty_alias_path() {
+        let mut parser = DwarfParser::new();
+        let target_offset = 0x10;
+
+        let mut target = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        target.offset = target_offset;
+        parser.type_cache.insert(target_offset, target);
+
+        let mut visiting = HashSet::new();
+        let resolved = TypeResolver::resolve_type_by_offset(
+            &parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+            target_offset,
+            &mut visiting,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.flat.name, "uint16_t");
+        assert_eq!(resolved.real_offset, target_offset);
+        assert!(resolved.alias_offsets.is_empty());
+    }
+
+    #[test]
+    fn resolved_type_tracks_real_offset_behind_alias_chain() {
+        let mut parser = DwarfParser::new();
+        let target_offset = 0x10;
+        let alias_offset = 0x20;
+        let const_offset = 0x30;
+
+        let mut target = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        target.offset = target_offset;
+        parser.type_cache.insert(target_offset, target);
+
+        let mut alias =
+            TypeInfo::primitive("VehicleSpeed_T".to_string(), 0, TypeEncoding::Unsigned);
+        alias.kind = TypeKind::Typedef;
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, target_offset);
+
+        let mut const_type = TypeInfo::primitive("const".to_string(), 0, TypeEncoding::Unsigned);
+        const_type.offset = const_offset;
+        parser.type_cache.insert(const_offset, const_type);
+        parser.type_refs.insert(const_offset, alias_offset);
+
+        let mut visiting = HashSet::new();
+        let resolved = TypeResolver::resolve_type_by_offset(
+            &parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+            const_offset,
+            &mut visiting,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.flat.name, "const");
+        assert_eq!(resolved.flat.offset, const_offset);
+        assert_eq!(resolved.flat.kind, TypeKind::Primitive);
+        assert_eq!(resolved.flat.size, 2);
+        assert_eq!(resolved.real_offset, target_offset);
+        assert_eq!(resolved.alias_offsets, vec![alias_offset, const_offset]);
+    }
+
+    #[test]
+    fn alias_flattening_preserves_outer_name_and_offset() {
+        let mut parser = DwarfParser::new();
+        let target_offset = 0x10;
+        let alias_offset = 0x20;
+
+        let mut target = TypeInfo::primitive("uint16_t".to_string(), 2, TypeEncoding::Unsigned);
+        target.offset = target_offset;
+        parser.type_cache.insert(target_offset, target);
+
+        let mut alias =
+            TypeInfo::primitive("VehicleSpeed_T".to_string(), 0, TypeEncoding::Unsigned);
+        alias.kind = TypeKind::Typedef;
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, target_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&alias_offset).unwrap();
+        assert_eq!(resolved.name, "VehicleSpeed_T");
+        assert_eq!(resolved.offset, alias_offset);
+        assert_eq!(resolved.kind, TypeKind::Primitive);
+        assert_eq!(resolved.size, 2);
+    }
+
+    #[test]
+    fn resolver_leaves_alias_cycle_unresolved() {
+        let mut parser = DwarfParser::new();
+        let first_offset = 0x10;
+        let second_offset = 0x20;
+
+        let mut first = TypeInfo::primitive("AliasA".to_string(), 0, TypeEncoding::Unsigned);
+        first.kind = TypeKind::Typedef;
+        first.offset = first_offset;
+        parser.type_cache.insert(first_offset, first);
+
+        let mut second = TypeInfo::primitive("AliasB".to_string(), 0, TypeEncoding::Unsigned);
+        second.kind = TypeKind::Typedef;
+        second.offset = second_offset;
+        parser.type_cache.insert(second_offset, second);
+
+        parser.type_refs.insert(first_offset, second_offset);
+        parser.type_refs.insert(second_offset, first_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let first = parser.type_cache.get(&first_offset).unwrap();
+        let second = parser.type_cache.get(&second_offset).unwrap();
+        assert_eq!(first.name, "AliasA");
+        assert_eq!(first.kind, TypeKind::Typedef);
+        assert_eq!(first.size, 0);
+        assert_eq!(second.name, "AliasB");
+        assert_eq!(second.kind, TypeKind::Typedef);
+        assert_eq!(second.size, 0);
+    }
+
+    #[test]
+    fn recursive_array_resolution_keeps_placeholder_when_element_alias_cycle_is_detected() {
+        let mut parser = DwarfParser::new();
+        let array_offset = 0x10;
+        let alias_offset = 0x20;
+
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[2]".to_string(),
+                4,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![2],
+                array_offset,
+            ),
+        );
+
+        let mut alias = TypeInfo::primitive("ArrayAlias".to_string(), 0, TypeEncoding::Unsigned);
+        alias.kind = TypeKind::Typedef;
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, array_offset);
+        parser.array_elem_offsets.insert(array_offset, alias_offset);
+
+        let mut visiting = HashSet::new();
+        let resolved = TypeResolver::resolve_type_by_offset(
+            &parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+            array_offset,
+            &mut visiting,
+        )
+        .unwrap();
+
+        let elem = resolved.flat.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.name, "unknown");
+        assert_eq!(elem.size, 0);
+    }
+
+    #[test]
+    fn resolver_keeps_array_placeholder_when_element_alias_cycle_is_detected() {
+        let mut parser = DwarfParser::new();
+        let array_offset = 0x10;
+        let alias_offset = 0x20;
+
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[2]".to_string(),
+                4,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![2],
+                array_offset,
+            ),
+        );
+
+        let mut alias = TypeInfo::primitive("ArrayAlias".to_string(), 0, TypeEncoding::Unsigned);
+        alias.kind = TypeKind::Typedef;
+        alias.offset = alias_offset;
+        parser.type_cache.insert(alias_offset, alias);
+        parser.type_refs.insert(alias_offset, array_offset);
+        parser.array_elem_offsets.insert(array_offset, alias_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&array_offset).unwrap();
+        let elem = resolved.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.name, "unknown");
+        assert_eq!(elem.size, 0);
+    }
+
+    #[test]
+    fn resolver_keeps_array_placeholder_when_element_cycle_is_detected() {
+        let mut parser = DwarfParser::new();
+        let array_offset = 0x10;
+        parser.type_cache.insert(
+            array_offset,
+            TypeInfo::array_type(
+                "array[2]".to_string(),
+                4,
+                TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                vec![2],
+                array_offset,
+            ),
+        );
+        parser.array_elem_offsets.insert(array_offset, array_offset);
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&array_offset).unwrap();
+        let elem = resolved.pointer_target.as_deref().unwrap();
+        assert_eq!(elem.name, "unknown");
+        assert_eq!(elem.size, 0);
+    }
+
+    #[test]
+    fn resolver_ignores_missing_member_type_offset() {
+        let mut parser = DwarfParser::new();
+        let struct_offset = 0x10;
+        let member = StructMember::new("missing".to_string(), 0, "unknown".to_string(), 0)
+            .with_type_offset(0xdead);
+        parser.type_cache.insert(
+            struct_offset,
+            TypeInfo::struct_type("HasMissing".to_string(), 1, vec![member], struct_offset),
+        );
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let resolved = parser.type_cache.get(&struct_offset).unwrap();
+        assert_eq!(resolved.members[0].type_name, "unknown");
+        assert_eq!(resolved.members[0].type_size, 0);
     }
 
     #[test]

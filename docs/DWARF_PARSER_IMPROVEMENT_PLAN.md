@@ -100,6 +100,14 @@
 - 现有 CLI 查询结果保持一致或按测试预期变化。
 - `same_resolved_type()` 不再承担核心正确性职责。
 
+### 当前进展
+
+- 已抽出 `TypeResolver`，并将 array element、typedef/const/volatile alias、struct/union member 的类型修正收敛到 `resolve_type_by_offset()` 递归解析。
+- 已移除旧的 `resolve_type_graph()` 多轮拍平流程，alias 链不再依赖固定 32 轮刷新。
+- 已补充 synthetic 单测覆盖深 alias 链、member 经 alias 指向 array、alias cycle、array self-cycle、missing member type offset。
+- `same_resolved_type()` 仍保留为避免等价类型重复刷新和旧克隆差异判断的保护，不再作为 alias 链解析的主要正确性来源。
+- 对外仍输出扁平化 `TypeInfo`，CLI/Tauri/数据包格式未改变。
+
 ## 阶段 4：Resolver 内部区分别名和真实类型
 
 ### 目标
@@ -118,9 +126,21 @@
 - array 维度和元素类型由 offset 解析得到，不受 HashMap 遍历顺序影响。
 - 对外 API 不需要大规模改动。
 
-## 阶段 5：集成回归测试
+### 当前进展
 
-### 目标
+- Resolver 内部已引入私有 `ResolvedType`，开始区分对外扁平 `flat TypeInfo`、alias 链背后的 `real_offset`，以及内部 alias offset 路径。
+- 阶段 4 当前目标已基本完成：内部 resolver 已能同时携带 flat 输出、真实目标 offset 和 alias path，外部 API 与数据包格式保持不变。
+- `resolve_type_by_offset()` 仍返回对当前消费者兼容的扁平类型，同时保留真实目标 offset 供后续 resolver 内部规则使用。
+- 已补充 synthetic 单测验证 alias 链解析时外层 name/offset 保留在 flat 输出中，真实目标 offset 保留在 `real_offset` 中。
+- `real_offset` 已用于 array element 解析中的 alias 间接自循环检测，顶层和递归 array 解析都会避免把数组自身或未解析 0-size alias 写回 `pointer_target`。
+
+## 阶段 5：集成回归测试（已取消）
+
+> 决定：暂不推进阶段 5，不再把大 ELF 或小 ELF fixture 沉淀为自动化集成回归。真实 ELF 场景仅保留为本地手工抽样验证，不作为后续计划或提交内容。
+
+### 原计划内容
+
+#### 目标
 
 把人工验证过的大 ELF 场景沉淀成可重复回归。
 
