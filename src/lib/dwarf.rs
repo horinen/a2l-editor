@@ -95,7 +95,7 @@ impl TypeResolver {
         array_elem_offsets: &HashMap<u64, u64>,
     ) {
         Self::resolve_type_graph(type_cache, type_refs);
-        Self::resolve_array_element_types(type_cache, array_elem_offsets);
+        Self::resolve_array_element_types(type_cache, type_refs, array_elem_offsets);
         Self::resolve_alias_chains(type_cache, type_refs);
         Self::resolve_member_types(type_cache);
         Self::normalize_bitfield_offsets(type_cache);
@@ -257,46 +257,96 @@ impl TypeResolver {
 
     fn resolve_array_element_types(
         type_cache: &mut HashMap<u64, TypeInfo>,
+        type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
     ) {
-        let array_offsets: Vec<u64> = type_cache
+        let updates: Vec<(u64, TypeInfo)> = type_cache
             .iter()
             .filter(|(_, t)| t.kind == TypeKind::Array)
-            .map(|(offset, _)| *offset)
+            .filter_map(|(array_offset, _)| {
+                let elem_offset = *array_elem_offsets.get(array_offset)?;
+                if elem_offset == 0 {
+                    return None;
+                }
+                let mut visiting = HashSet::new();
+                Self::resolve_type_by_offset(
+                    type_cache,
+                    type_refs,
+                    array_elem_offsets,
+                    elem_offset,
+                    &mut visiting,
+                )
+                .map(|elem_type| (*array_offset, elem_type))
+            })
             .collect();
 
-        let elem_type_offsets: HashMap<u64, u64> =
-            array_elem_offsets.iter().map(|(k, v)| (*k, *v)).collect();
+        for (array_offset, elem_type) in updates {
+            if let Some(array_type) = type_cache.get_mut(&array_offset) {
+                let needs_update = match &array_type.pointer_target {
+                    None => true,
+                    Some(current) => !Self::same_resolved_type(current, &elem_type),
+                };
+                if needs_update {
+                    array_type.pointer_target = Some(Box::new(elem_type));
+                    array_type.encoding = array_type
+                        .pointer_target
+                        .as_ref()
+                        .map(|e| e.encoding)
+                        .unwrap_or(TypeEncoding::Unsigned);
+                }
+            }
+        }
+    }
 
-        for _ in 0..10 {
-            let mut changed = false;
-            for &array_offset in &array_offsets {
-                if let Some(&elem_offset) = elem_type_offsets.get(&array_offset) {
-                    if elem_offset > 0 {
-                        if let Some(elem_type) = type_cache.get(&elem_offset).cloned() {
-                            if let Some(array_type) = type_cache.get_mut(&array_offset) {
-                                let needs_update = match &array_type.pointer_target {
-                                    None => true,
-                                    Some(current) => !Self::same_resolved_type(current, &elem_type),
-                                };
-                                if needs_update {
-                                    array_type.pointer_target = Some(Box::new(elem_type));
-                                    array_type.encoding = array_type
-                                        .pointer_target
-                                        .as_ref()
-                                        .map(|e| e.encoding)
-                                        .unwrap_or(TypeEncoding::Unsigned);
-                                    changed = true;
-                                }
-                            }
-                        }
+    fn resolve_type_by_offset(
+        type_cache: &HashMap<u64, TypeInfo>,
+        type_refs: &HashMap<u64, u64>,
+        array_elem_offsets: &HashMap<u64, u64>,
+        offset: u64,
+        visiting: &mut HashSet<u64>,
+    ) -> Option<TypeInfo> {
+        if !visiting.insert(offset) {
+            return None;
+        }
+
+        let mut resolved = type_cache.get(&offset)?.clone();
+
+        if let Some(&target_offset) = type_refs.get(&offset) {
+            if target_offset > 0 {
+                if let Some(target) = Self::resolve_type_by_offset(
+                    type_cache,
+                    type_refs,
+                    array_elem_offsets,
+                    target_offset,
+                    visiting,
+                ) {
+                    let own_name = resolved.name.clone();
+                    resolved = target;
+                    resolved.name = own_name;
+                    resolved.offset = offset;
+                }
+            }
+        }
+
+        if resolved.kind == TypeKind::Array {
+            if let Some(&elem_offset) = array_elem_offsets.get(&offset) {
+                if elem_offset > 0 {
+                    if let Some(elem_type) = Self::resolve_type_by_offset(
+                        type_cache,
+                        type_refs,
+                        array_elem_offsets,
+                        elem_offset,
+                        visiting,
+                    ) {
+                        resolved.encoding = elem_type.encoding;
+                        resolved.pointer_target = Some(Box::new(elem_type));
                     }
                 }
             }
-            if !changed {
-                break;
-            }
         }
+
+        visiting.remove(&offset);
+        Some(resolved)
     }
 
     fn normalize_bitfield_offsets(type_cache: &mut HashMap<u64, TypeInfo>) {
@@ -1569,6 +1619,50 @@ mod tests {
         let elem = inner.pointer_target.as_deref().unwrap();
         assert_eq!(elem.kind, TypeKind::Struct);
         assert_eq!(elem.members[0].name, "CurrentDebStatus");
+    }
+
+    #[test]
+    fn recursively_resolves_deep_nested_array_elements() {
+        let mut parser = DwarfParser::new();
+        let elem_offset = 0x10;
+        parser.type_cache.insert(
+            elem_offset,
+            TypeInfo::primitive("uint8_t".to_string(), 1, TypeEncoding::Unsigned),
+        );
+
+        let mut child_offset = elem_offset;
+        for depth in (0..12).rev() {
+            let array_offset = 0x20 + depth;
+            parser.type_cache.insert(
+                array_offset,
+                TypeInfo::array_type(
+                    format!("array_depth_{}", depth),
+                    1,
+                    TypeInfo::primitive("unknown".to_string(), 0, TypeEncoding::Unsigned),
+                    vec![1],
+                    array_offset,
+                ),
+            );
+            parser.array_elem_offsets.insert(array_offset, child_offset);
+            child_offset = array_offset;
+        }
+
+        TypeResolver::resolve(
+            &mut parser.type_cache,
+            &parser.type_refs,
+            &parser.array_elem_offsets,
+        );
+
+        let mut current = parser
+            .type_cache
+            .get(&0x20)
+            .and_then(|t| t.pointer_target.as_deref())
+            .unwrap();
+        for _ in 1..12 {
+            current = current.pointer_target.as_deref().unwrap();
+        }
+        assert_eq!(current.name, "uint8_t");
+        assert_eq!(current.size, 1);
     }
 
     #[test]
