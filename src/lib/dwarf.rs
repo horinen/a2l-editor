@@ -154,53 +154,49 @@ impl TypeResolver {
     ) -> MemberResolverStats {
         let mut stats = MemberResolverStats::default();
         let mut unique_type_offsets = HashSet::new();
-        let mut member_type_cache: HashMap<u64, Option<(String, usize)>> = HashMap::new();
-        let resolutions: Vec<(u64, Vec<(usize, String, usize)>)> = type_cache
-            .iter()
-            .filter(|(_, t)| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
-            .map(|(offset, type_info)| {
-                let member_updates: Vec<(usize, String, usize)> = type_info
-                    .members
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, member)| {
-                        let type_offset = member.type_offset?;
-                        if type_offset == 0 {
-                            return None;
-                        }
-
+        for type_info in type_cache
+            .values()
+            .filter(|t| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+        {
+            for member in &type_info.members {
+                if let Some(type_offset) = member.type_offset {
+                    if type_offset > 0 {
                         stats.members_with_type_offset += 1;
                         unique_type_offsets.insert(type_offset);
-                        let cached = member_type_cache.entry(type_offset).or_insert_with(|| {
-                            let mut visiting = HashSet::new();
-                            Self::resolve_type_by_offset(
-                                type_cache,
-                                type_refs,
-                                array_elem_offsets,
-                                type_offset,
-                                &mut visiting,
-                            )
-                            .map(|resolved| (resolved.flat.name, resolved.flat.size))
-                        });
-                        cached
-                            .clone()
-                            .map(|(type_name, type_size)| (idx, type_name, type_size))
-                    })
-                    .collect();
-                (*offset, member_updates)
-            })
-            .collect();
+                    }
+                }
+            }
+        }
 
         stats.unique_type_offsets = unique_type_offsets.len();
 
-        for (offset, updates) in resolutions {
-            if let Some(type_info) = type_cache.get_mut(&offset) {
-                for (idx, type_name, type_size) in updates {
-                    stats.member_updates += 1;
-                    let member = &mut type_info.members[idx];
-                    member.type_name = type_name;
-                    if member.type_size == 0 {
-                        member.type_size = type_size;
+        let mut member_type_cache = HashMap::with_capacity(unique_type_offsets.len());
+        for type_offset in unique_type_offsets {
+            let mut visiting = HashSet::new();
+            let resolved = Self::resolve_type_by_offset(
+                type_cache,
+                type_refs,
+                array_elem_offsets,
+                type_offset,
+                &mut visiting,
+            )
+            .map(|resolved| (resolved.flat.name, resolved.flat.size));
+            member_type_cache.insert(type_offset, resolved);
+        }
+
+        for type_info in type_cache
+            .values_mut()
+            .filter(|t| t.kind == TypeKind::Struct || t.kind == TypeKind::Union)
+        {
+            for member in &mut type_info.members {
+                if let Some(type_offset) = member.type_offset {
+                    if let Some(Some((type_name, type_size))) = member_type_cache.get(&type_offset)
+                    {
+                        member.type_name = type_name.clone();
+                        if member.type_size == 0 {
+                            member.type_size = *type_size;
+                        }
+                        stats.member_updates += 1;
                     }
                 }
             }

@@ -188,23 +188,44 @@ cargo run --bin a2l-cli -- entries temp/test.elf "Dem_Cfg_StatusData.EventStatus
 
 验收查询结果保持不变：总条目数 253005，`Dem_Cfg_StatusData.EventStatus` 匹配 323 条。
 
+### Member type 写回表去除优化记录
+
+`resolve_member_types()` 原先在遍历 struct/union member 时，一边解析 type offset，一边构造 `Vec<(offset, Vec<(idx, type_name, type_size)>)>` 中间写回表。真实 ELF 中 member 更新数为 19351452，这会额外产生大量临时 Vec、tuple 和字符串 clone。
+
+已改为两阶段处理：先扫描全部成员收集唯一 `type_offset` 并解析成局部缓存，再第二次遍历 struct/union 就地写回成员 `type_name` 和 `type_size`。该缓存仍只限 member 阶段内部，不跨 resolver 阶段复用，不改变 `.a2ldata` 格式或 resolver 对外语义。
+
+优化后真实 ELF 测量结果：
+
+- DWARF parse 总计: 40.258 s
+  - DWARF DIE 遍历: 17.341 s
+  - TypeResolver: 22.886 s
+- TypeResolver 子阶段：
+  - array element types: 386 ms
+  - alias chains: 8.044 s
+  - member types: 13.684 s
+  - bitfield normalize: 771 ms
+- 解析小计: 41.110 s
+- 生成总计: 42.195 s
+
+验收查询结果保持不变：总条目数 253005，`Dem_Cfg_StatusData.EventStatus` 匹配 323 条。
+
 ### 当前最终基线
 
 截至本轮优化后的最终验证结果：
 
-- 深度解析完成: 253005 条目, 耗时 51612 ms
-- DWARF parse 总计: 45.378 s
-  - DWARF DIE 遍历: 17.593 s
-  - TypeResolver: 27.754 s
-- 变量提取: 86 ms
-- A2L entry 展开: 813 ms
-- 数据包序列化/写盘: 1.008 s
-- 解析小计: 46.279 s
-- 生成总计: 47.287 s
+- 深度解析完成: 253005 条目, 耗时 46471 ms
+- DWARF parse 总计: 40.258 s
+  - DWARF DIE 遍历: 17.341 s
+  - TypeResolver: 22.886 s
+- 变量提取: 68 ms
+- A2L entry 展开: 782 ms
+- 数据包序列化/写盘: 1.085 s
+- 解析小计: 41.110 s
+- 生成总计: 42.195 s
 
 验收查询结果保持不变：总条目数 253005，`Dem_Cfg_StatusData.EventStatus` 匹配 323 条。
 
-继续优化空间判断：剩余热点主要是 `TypeResolver` 的 member types 约 18 s、alias chains 约 8 s，以及 DWARF DIE 遍历约 18 s。进一步压缩需要更深层的类型模型/字符串所有权/alias 链解析语义调整，风险明显高于本轮保留的局部优化；本轮停止继续修改，保留已验证收益明确的改动。
+继续优化空间判断：剩余热点主要是 `TypeResolver` 的 member types 约 14 s、alias chains 约 8 s，以及 DWARF DIE 遍历约 17 s。进一步压缩需要更深层的类型模型/字符串所有权/alias 链解析语义调整，风险明显高于本轮保留的局部优化；本轮停止继续修改，保留已验证收益明确的改动。
 
 ## 第二阶段：按瓶颈优化
 
