@@ -2,7 +2,7 @@
   "project_type": "tauri",
   "app_path": "target/debug/a2l-editor-tauri",
   "app_name": "A2L Editor",
-  "version": "0.2.0",
+  "version": "0.3.5",
   "features": [
     "ELF 文件加载",
     "数据包加载",

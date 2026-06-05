@@ -1,6 +1,12 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+declare const process: {
+  env: {
+    TAURI_DEBUG?: string;
+  };
+};
+
 export default defineConfig({
   plugins: [sveltekit()],
   clearScreen: false,
