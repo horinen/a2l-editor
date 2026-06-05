@@ -120,7 +120,7 @@ impl TypeResolver {
         let alias_chains = alias_start.elapsed();
 
         let member_start = Instant::now();
-        let member_stats = Self::resolve_member_types(type_cache, type_refs, array_elem_offsets);
+        let member_stats = Self::resolve_member_types(type_cache);
         let member_types = member_start.elapsed();
 
         let bitfield_start = Instant::now();
@@ -147,11 +147,7 @@ impl TypeResolver {
         target
     }
 
-    fn resolve_member_types(
-        type_cache: &mut HashMap<u64, TypeInfo>,
-        type_refs: &HashMap<u64, u64>,
-        array_elem_offsets: &HashMap<u64, u64>,
-    ) -> MemberResolverStats {
+    fn resolve_member_types(type_cache: &mut HashMap<u64, TypeInfo>) -> MemberResolverStats {
         let mut stats = MemberResolverStats::default();
         let mut unique_type_offsets = HashSet::new();
         for type_info in type_cache
@@ -172,15 +168,9 @@ impl TypeResolver {
 
         let mut member_type_cache = HashMap::with_capacity(unique_type_offsets.len());
         for type_offset in unique_type_offsets {
-            let mut visiting = HashSet::new();
-            let resolved = Self::resolve_type_by_offset(
-                type_cache,
-                type_refs,
-                array_elem_offsets,
-                type_offset,
-                &mut visiting,
-            )
-            .map(|resolved| (resolved.flat.name, resolved.flat.size));
+            let resolved = type_cache
+                .get(&type_offset)
+                .map(|type_info| (type_info.name.clone(), type_info.size));
             member_type_cache.insert(type_offset, resolved);
         }
 
@@ -218,7 +208,7 @@ impl TypeResolver {
             .keys()
             .filter_map(|from_offset| {
                 let current = type_cache.get(from_offset)?;
-                let mut visiting = HashSet::new();
+                let mut visiting = Vec::new();
                 let target = Self::resolve_type_by_offset(
                     type_cache,
                     type_refs,
@@ -265,7 +255,7 @@ impl TypeResolver {
                 if elem_offset == 0 || elem_offset == *array_offset {
                     return None;
                 }
-                let mut visiting = HashSet::new();
+                let mut visiting = Vec::new();
                 let elem_type = Self::resolve_type_by_offset(
                     type_cache,
                     type_refs,
@@ -304,11 +294,12 @@ impl TypeResolver {
         type_refs: &HashMap<u64, u64>,
         array_elem_offsets: &HashMap<u64, u64>,
         offset: u64,
-        visiting: &mut HashSet<u64>,
+        visiting: &mut Vec<u64>,
     ) -> Option<ResolvedType> {
-        if !visiting.insert(offset) {
+        if visiting.contains(&offset) {
             return None;
         }
+        visiting.push(offset);
 
         let mut resolved = ResolvedType {
             flat: type_cache.get(&offset)?.clone(),
@@ -356,7 +347,7 @@ impl TypeResolver {
             }
         }
 
-        visiting.remove(&offset);
+        visiting.pop();
         Some(resolved)
     }
 
@@ -813,7 +804,12 @@ impl DwarfParser {
     ) -> Option<StructMember> {
         let attrs = self.parse_member_attrs(entry, unit_offset);
         let name = attrs.name.unwrap_or_else(|| "_".to_string());
-        let mut member = StructMember::new(name, attrs.offset, "unknown".to_string(), attrs.size)
+        let initial_type_name = if attrs.type_offset > 0 {
+            String::new()
+        } else {
+            "unknown".to_string()
+        };
+        let mut member = StructMember::new(name, attrs.offset, initial_type_name, attrs.size)
             .with_type_offset(attrs.type_offset);
 
         if let Some((bit_offset, bit_size, is_absolute)) = attrs.bitfield_info {
@@ -2062,7 +2058,7 @@ mod tests {
         target.offset = target_offset;
         parser.type_cache.insert(target_offset, target);
 
-        let mut visiting = HashSet::new();
+        let mut visiting = Vec::new();
         let resolved = TypeResolver::resolve_type_by_offset(
             &parser.type_cache,
             &parser.type_refs,
@@ -2100,7 +2096,7 @@ mod tests {
         parser.type_cache.insert(const_offset, const_type);
         parser.type_refs.insert(const_offset, alias_offset);
 
-        let mut visiting = HashSet::new();
+        let mut visiting = Vec::new();
         let resolved = TypeResolver::resolve_type_by_offset(
             &parser.type_cache,
             &parser.type_refs,
@@ -2207,7 +2203,7 @@ mod tests {
         parser.type_refs.insert(alias_offset, array_offset);
         parser.array_elem_offsets.insert(array_offset, alias_offset);
 
-        let mut visiting = HashSet::new();
+        let mut visiting = Vec::new();
         let resolved = TypeResolver::resolve_type_by_offset(
             &parser.type_cache,
             &parser.type_refs,

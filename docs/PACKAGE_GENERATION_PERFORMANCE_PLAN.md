@@ -209,23 +209,86 @@ cargo run --bin a2l-cli -- entries temp/test.elf "Dem_Cfg_StatusData.EventStatus
 
 验收查询结果保持不变：总条目数 253005，`Dem_Cfg_StatusData.EventStatus` 匹配 323 条。
 
+### Resolver recursion stack Vec optimization record
+
+`resolve_type_by_offset()` previously created a `HashSet<u64>` for cycle detection on every resolution. Alias resolution runs 1481800 resolutions, and member resolution resolves 670305 unique `type_offset` values, so these small HashSet allocations and hash lookups are measurable.
+
+Changed the recursion guard to a `Vec<u64>` that represents the current call stack: check `contains()`, then `push()`, and `pop()` on return. The resolver only needs to know whether the current stack already contains an offset, and the real alias/array depth is much smaller than the number of calls.
+
+Optimized real ELF result:
+
+- DWARF parse total: 37.323 s
+  - DWARF DIE traversal: 17.188 s
+  - TypeResolver: 20.104 s
+- TypeResolver detail:
+  - array element types: 337 ms
+  - alias chains: 6.500 s
+  - member types: 12.499 s
+  - bitfield normalize: 767 ms
+- parse subtotal: 38.166 s
+- generation total: 39.207 s
+
+Validation result unchanged: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries.
+
+### Member type direct cache read optimization record
+
+After `resolve_array_element_types()` and `resolve_alias_chains()` complete, member resolution only needs each member target type name and size. The previous member cache still called `resolve_type_by_offset()` for every unique member `type_offset`, cloning resolved `TypeInfo` values even though the canonical `type_cache` entry had already been updated by earlier resolver stages.
+
+Changed member cache construction to read `(name, size)` directly from the already-resolved `type_cache`. This keeps the member stage local and does not change array/alias resolution order, package format, or parser version behavior.
+
+Optimized real ELF result:
+
+- DWARF parse total: 35.022 s
+  - DWARF DIE traversal: 17.204 s
+  - TypeResolver: 17.787 s
+- TypeResolver detail:
+  - array element types: 337 ms
+  - alias chains: 6.526 s
+  - member types: 10.145 s
+  - bitfield normalize: 777 ms
+- parse subtotal: 35.866 s
+- generation total: 36.866 s
+
+Validation result unchanged: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries.
+
+### Member temporary type name allocation optimization record
+
+`parse_member()` previously initialized every `StructMember` with the owned string `"unknown"` as a temporary `type_name`. On the real ELF there are 9611519 `DW_TAG_member` entries, and members with a valid `type_offset` later have `type_name` overwritten by resolver output.
+
+Changed member parsing to use an empty string placeholder when `type_offset > 0`, while preserving `"unknown"` for members without a type offset. This avoids allocating and then discarding millions of identical temporary strings without changing the resolved member names or package output.
+
+Optimized real ELF result:
+
+- DWARF parse total: 32.764 s
+  - DWARF DIE traversal: 16.585 s
+  - TypeResolver: 16.148 s
+- TypeResolver detail:
+  - array element types: 323 ms
+  - alias chains: 6.105 s
+  - member types: 8.944 s
+  - bitfield normalize: 775 ms
+- parse subtotal: 33.606 s
+- generation total: 34.651 s
+
+Validation result unchanged: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries.
+
 ### 当前最终基线
 
 截至本轮优化后的最终验证结果：
 
-- 深度解析完成: 253005 条目, 耗时 46471 ms
-- DWARF parse 总计: 40.258 s
-  - DWARF DIE 遍历: 17.341 s
-  - TypeResolver: 22.886 s
-- 变量提取: 68 ms
-- A2L entry 展开: 782 ms
-- 数据包序列化/写盘: 1.085 s
-- 解析小计: 41.110 s
-- 生成总计: 42.195 s
+- 深度解析完成: 253005 条目, 耗时 38762 ms
+- DWARF parse 总计: 32.764 s
+  - DWARF DIE 遍历: 16.585 s
+  - TypeResolver: 16.148 s
+- 变量提取: 65 ms
+- A2L entry 展开: 774 ms
+- 数据包序列化/写盘: 1.045 s
+- 解析小计: 33.606 s
+- 生成总计: 34.651 s
 
 验收查询结果保持不变：总条目数 253005，`Dem_Cfg_StatusData.EventStatus` 匹配 323 条。
 
-继续优化空间判断：剩余热点主要是 `TypeResolver` 的 member types 约 14 s、alias chains 约 8 s，以及 DWARF DIE 遍历约 17 s。进一步压缩需要更深层的类型模型/字符串所有权/alias 链解析语义调整，风险明显高于本轮保留的局部优化；本轮停止继续修改，保留已验证收益明确的改动。
+继续优化空间判断：剩余热点主要是 `TypeResolver` 的 member types 约 8.9 s、alias chains 约 6.1 s，以及 DWARF DIE 遍历约 16.6 s。进一步压缩需要更深层的类型模型/字符串所有权/alias 链解析语义调整，风险明显高于本轮保留的局部优化；本轮停止继续修改，保留已验证收益明确的改动。
 
 ## 第二阶段：按瓶颈优化
 
