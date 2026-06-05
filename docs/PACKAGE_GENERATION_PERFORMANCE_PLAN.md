@@ -286,6 +286,20 @@ Real ELF result for the reverted attempt:
 
 Validation result remained correct: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries. Because it did not improve the 34.651 s baseline, the code change was reverted and only this negative result is retained.
 
+### UTF-8 name fast path negative record
+
+Tried replacing direct `String::from_utf8_lossy(...).to_string()` calls with a helper that first attempts `std::str::from_utf8()` and only falls back to lossy conversion on invalid UTF-8. The hypothesis was that the real ELF has inline UTF-8 names and could avoid the lossy `Cow` path.
+
+Real ELF result for the reverted attempt:
+
+- DWARF parse total: 36.183 s
+  - DWARF DIE traversal: 17.875 s
+  - TypeResolver: 18.275 s
+- parse subtotal: 37.119 s
+- generation total: 38.181 s
+
+Validation result remained correct: total entries 253005, `Dem_Cfg_StatusData.EventStatus` matches 323 entries. Because it was much slower than the 34.651 s baseline, the code change was reverted and only this negative result is retained.
+
 ### 当前最终基线
 
 截至本轮优化后的最终验证结果：
