@@ -65,6 +65,11 @@ fn main() {
             commands::delete_variables,
             commands::save_a2l_changes,
             commands::set_endianness,
+            commands::list_compu_methods,
+            commands::get_compu_method,
+            commands::save_compu_method_cmd,
+            commands::delete_compu_method_cmd,
+            commands::preview_compu_method_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

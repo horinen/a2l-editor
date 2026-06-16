@@ -11,10 +11,15 @@
 - **Tauri 版本**: 现代化 Web 界面，支持多主题
 - **A2L 导出**: 追加到已有 A2L 文件，支持观测变量和标定变量
 - **手动添加**: 直接输入变量名、地址等信息添加 A2L 变量
+- **Excel 批量导入**: 通过 Excel 模板批量导入变量，link 列自动匹配 ELF 符号
 - **变量编辑**: 可编辑已有 A2L 变量的名称、地址、数据类型、BIT_MASK
+- **转化系数编辑**: 编辑 F/OFFSET/Unit 自动生成 COMPU_METHOD，支持线性/文字表/插值表
 - **格式保留**: 编辑时保留原始格式（缩进、注释、空格）
+- **地址批量更新**: ELF 重新编译后按变量名一键同步 A2L 地址
 - **快捷复制**: 右键菜单支持复制变量名称和地址
-- **CLI 工具**: 命令行创建数据包、查询条目
+- **搜索增强**: 支持 `^`/`$` 锚点匹配（前缀/后缀/精确），自然序/字典序一键切换
+- **最近文件**: 自动记录最近打开的 ELF/A2L，启动时恢复上次文件
+- **CLI 工具**: 命令行解析、查询条目、导出 A2L
 
 ## 下载
 
@@ -48,7 +53,7 @@ chmod +x A2L-Editor-Linux-x64.AppImage
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 📁 文件 ▼  ❓ 手册  ℹ️ 关于                    小端 🎨  v0.1.0              │
+│ 📁 文件 ▼  ❓ 手册  ℹ️ 关于                    小端 🎨  v0.3.5              │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 📂 ELF: firmware.elf (437 MB, 133,646 条目)                                 │
 │ 📦 数据包: firmware.elf.a2ldata                                              │
@@ -146,7 +151,74 @@ chmod +x A2L-Editor-Linux-x64.AppImage
 - **复制名称**: 右键变量 → **「📋 复制名称」**
 - **复制地址**: 右键变量 → **「📋 复制地址」**
 
-### 8. 主题切换
+### 8. 搜索进阶（锚点匹配 + 自然排序）
+
+搜索框支持锚点匹配语法（大小写不敏感）：
+
+| 输入 | 匹配方式 | 示例 |
+|------|---------|------|
+| `keyword` | 包含匹配（默认） | `temp` → `engine_temp`、`temp_high` |
+| `^keyword` | 前缀匹配（以…开头） | `^temp` → `temp_high`，不含 `engine_temp` |
+| `keyword$` | 后缀匹配（以…结尾） | `temp$` → `engine_temp`，不含 `temp_high` |
+| `^keyword$` | 精确匹配（全等） | `^temp$` → 仅 `temp` |
+
+- `^` 必须在最前、`$` 必须在最后才被识别为锚点
+- **自然序/字典序切换**：每个搜索框最右侧的 `Aa`/`1a` 按钮切换排序模式
+  - `Aa`（字典序）：`v1, v10, v2, v20`（逐字符比较）
+  - `1a`（自然序）：`v1, v2, v10, v20`（数字按数值比较）
+- 两个面板（A2L / ELF）的排序模式各自独立
+
+### 9. Excel 批量导入
+
+通过 Excel 模板批量导入 A2L 变量，适合一次性添加大量变量。
+
+1. 点击 A2L 面板搜索栏右侧 **📤 导出 Excel 模板**，得到 `a2l-import-template.xlsx`
+2. 在 Excel 中按行填写变量（模板 C 列已内置「观测/标定」下拉）
+
+| 列名 | 必需 | 说明 |
+|------|------|------|
+| `名称` | 是 | A2L 中显示的变量名 |
+| `link` | 是 | ELF 中的符号名，必须已加载到 ELF 列表 |
+| `变量类型` | 是 | `观测`（MEASUREMENT）或 `标定`（CHARACTERISTIC） |
+| `转换关系` | 否 | 列可存在，当前未实际读取 |
+
+3. 点击 **📥 从 Excel 导入**，选择填好的 `.xlsx` 文件
+4. 导入规则：
+   - `link` 在 ELF 中找不到 → 跳过该行
+   - 同名变量 → **覆盖模式**（先删后加）
+   - 文件后缀必须为 `.xlsx`
+
+### 10. 转化系数编辑（COMPU_METHOD）
+
+**单变量快速编辑**：在 A2L 面板选中单个变量，下方编辑区的「转化系数 (COMPU_METHOD)」区块：
+- **F (斜率)** 和 **OFFSET (偏移)**：**两者必须同时填写**，保存时自动生成一个 LINEAR 类型的 COMPU_METHOD 并关联到该变量（只填其中一个不会触发）
+- **Unit (单位)**：可独立修改
+
+**转换关系管理面板**：点击 Header 顶部 **🔧 转换关系** 按钮（或编辑区的 🔧 管理），支持：
+- 新建/删除 COMPU_METHOD
+- 4 种类型：**LINEAR**（线性）、**TAB_VERB**（文字表）、**TAB_INTP**（插值表）、**IDENTICAL**（无转换）
+- 编辑 verb_pairs（原始值→文字）/ intp_pairs（X→Y 插值点）
+- 转换预览：输入范围与步长，预览原始值→物理值映射
+
+### 11. 更新 A2L 地址
+
+ELF 重新编译后地址变化时，按变量名批量同步 A2L 地址。
+
+1. 加载 ELF 文件（或数据包）+ 选择目标 A2L
+2. 点击 **「文件」→「🔄 更新 A2L 地址」**
+3. 程序按变量名在 ELF 中查找同名条目：
+   - 找到 → 更新为 ELF 中的新地址
+   - 找不到 → 跳过（不删除、不报错）
+4. 完成后状态栏显示更新数和跳过数
+
+### 12. 最近文件与自动加载
+
+- **最近文件列表**：「文件」菜单中 ELF 和 A2L 各自显示最近 5 条记录，点击即可快速加载；每个分组底部有「🗑️ 清除记录」
+- **启动自动加载**：应用启动时自动恢复最近列表的第 1 条 ELF 和第 1 条 A2L；若文件已失效会自动从列表移除
+- **记忆目录**：打开文件对话框会自动定位到上次打开的目录
+- 记录存储在浏览器本地，上限各 5 条
+
+### 13. 主题切换
 
 点击右上角 🎨 按钮切换主题（自动保存到本地）：
 - **Dark**: 深色主题（默认）
@@ -154,7 +226,7 @@ chmod +x A2L-Editor-Linux-x64.AppImage
 - **Midnight**: 午夜蓝主题
 - **Ocean**: 海洋蓝主题
 
-### 9. 字节序设置
+### 14. 字节序设置
 
 点击 **「小端」/「大端」** 按钮切换字节序设置
 
@@ -168,36 +240,19 @@ chmod +x A2L-Editor-Linux-x64.AppImage
 a2l-cli <命令> [参数] [选项]
 ```
 
-## 常用命令
+所有命令在需要时会自动加载或生成数据包（ELF 同目录的 `.a2ldata` 文件），无需单独创建。
 
-### 创建数据包
+## 命令
+
+### parse — 解析 ELF
 
 ```bash
-# 默认位置（ELF 同目录）
-a2l-cli create-package firmware.elf
-
-# 自定义位置
-a2l-cli create-package firmware.elf -o /path/to/data.a2ldata
+a2l-cli parse firmware.elf
 ```
 
-**输出示例：**
-```
-解析 ELF 文件: firmware.elf
-文件大小: 436.57 MB
+解析 ELF 文件，显示变量统计与条目数。若数据包不存在会执行深度解析（含 DWARF）并生成数据包。
 
-深度解析中...
-解析完成: 133646 条目
-
-保存数据包...
-
-=== 结果 ===
-数据包路径: /path/to/firmware.elf.a2ldata
-数据包大小: 23.09 MB
-条目数量: 133646
-耗时: 161.3 秒
-```
-
-### 列出 A2L 条目
+### entries — 列出 A2L 条目
 
 ```bash
 # 列出前 50 条
@@ -205,72 +260,44 @@ a2l-cli entries firmware.elf
 
 # 搜索并限制数量
 a2l-cli entries firmware.elf "keyword" -n 100
+
+# 以 A2L 块格式输出（MEASUREMENT 块）
+a2l-cli entries firmware.elf "keyword" --a2l
 ```
 
-**说明：**
-- 优先从数据包加载（如果存在）
-- 数据包不存在则解析 ELF 并缓存
+**选项：**
+- `-n <数量>`：显示数量（默认 50）
+- `--a2l`：以 A2L MEASUREMENT 块格式输出
 
-### 导出 A2L 文件
+### export — 导出 A2L 文件
 
 ```bash
-# 导出到文件
-a2l-cli export firmware.elf -o output.a2l -n 1000
+# 导出为观测变量（默认）
+a2l-cli export firmware.elf -o output.a2l
 
-# 输出到控制台
-a2l-cli export firmware.elf -n 100
+# 导出为标定变量
+a2l-cli export firmware.elf -o output.a2l -m characteristic
 ```
 
-### 查看变量类型
+**选项：**
+- `-o <文件>`：输出文件路径（必需）
+- `-m <模式>`：`measurement`（默认）或 `characteristic`
+
+### inspect — DWARF 调试信息（诊断用）
 
 ```bash
-a2l-cli type firmware.elf variable_name
+a2l-cli inspect firmware.elf [选项]
 ```
 
-### 解析 ELF
-
-```bash
-# 基础解析
-a2l-cli parse firmware.elf
-
-# 深度解析（含 DWARF）
-a2l-cli parse firmware.elf --deep
-```
-
-### 结构体相关
-
-```bash
-# 搜索结构体
-a2l-cli struct firmware.elf "struct_name"
-
-# 搜索结构体并导出成员
-a2l-cli struct firmware.elf "struct_name" --export
-
-# 列出结构体实例
-a2l-cli struct-instances firmware.elf 20
-```
-
-### DWARF 调试命令
-
-```bash
-# 列出 DWARF 变量及类型
-a2l-cli dwarf-vars firmware.elf 20
-
-# 列出数组类型
-a2l-cli arrays firmware.elf 20
-
-# 列出枚举类型
-a2l-cli enums firmware.elf 20
-
-# 列出位域结构体
-a2l-cli bitfields firmware.elf 20
-
-# 调试结构体成员类型
-a2l-cli debug-member firmware.elf struct_name member_name
-
-# 检查类型偏移
-a2l-cli check-offset firmware.elf type_name
-```
+**选项：**
+- `--structs [名称]`：查找/列出结构体
+- `--vars [数量]`：列出 DWARF 变量
+- `--types [数量]`：按 kind 列出类型
+- `--arrays [数量]`：列出数组类型
+- `--enums [数量]`：列出枚举类型
+- `--bitfields [数量]`：列出含位域的结构体
+- `--struct-instances [数量]`：列出结构体实例变量
+- `--offset 0xHH`：查看指定偏移处的类型
 
 ---
 
@@ -393,7 +420,7 @@ A: 数据包与 ELF 文件放在同一目录，文件名为 `<elf文件名>.a2ld
 
 ## Q: 如何更新数据包？
 
-A: 点击「重新生成缓存」按钮，或使用 CLI 命令 `a2l-cli create-package <elf>`。
+A: 点击「重新生成缓存」按钮。CLI 已无单独的创建命令，删除旧数据包后运行 `a2l-cli parse <elf>` 等任意命令会自动重新生成。
 
 ## Q: 为什么有些变量没有展开？
 
@@ -422,6 +449,22 @@ A: 点击 Header 右侧的「小端」/「大端」按钮。
 ## Q: 没有 ELF 源文件，只有数据包怎么办？
 
 A: 可以直接通过「文件」→「打开数据包」加载数据包文件。
+
+## Q: 搜索如何只匹配变量名开头/结尾？
+
+A: 搜索框支持锚点语法：`^temp` 匹配以 temp 开头，`temp$` 匹配以 temp 结尾，`^temp$` 精确匹配。不加锚点为包含匹配，大小写不敏感。
+
+## Q: 变量名排序 v1/v2/v10 顺序乱怎么办？
+
+A: 点击搜索框最右侧的 `Aa` 按钮切到 `1a` 自然序，数字部分按数值大小比较，得到 v1, v2, v10 的正确顺序。A2L 和 ELF 面板各自独立。
+
+## Q: Excel 导入提示格式错误？
+
+A: 第一行表头必须同时包含 `名称`、`link`、`变量类型` 三列；`变量类型` 只能填「观测」或「标定」；文件后缀必须是 `.xlsx`。可点击 📤 先导出标准模板。
+
+## Q: 转化系数填了 F 为什么没生效？
+
+A: F（斜率）和 OFFSET（偏移）必须同时填写，保存时才会自动生成 COMPU_METHOD。只填其中一个不会触发。
 
 ## License
 

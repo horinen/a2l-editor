@@ -10,6 +10,7 @@
   import GenerateDialog from '$lib/components/GenerateDialog.svelte';
   import AboutDialog from '$lib/components/AboutDialog.svelte';
   import HelpDialog from '$lib/components/HelpDialog.svelte';
+  import CompuMethodPanel from '$lib/components/CompuMethodPanel.svelte';
   import ContextMenuA2l from '$lib/components/ContextMenuA2l.svelte';
   import ContextMenuElf from '$lib/components/ContextMenuElf.svelte';
   import LoadingOverlay from '$lib/components/LoadingOverlay.svelte';
@@ -275,6 +276,7 @@
 <GenerateDialog />
 <AboutDialog />
 <HelpDialog />
+<CompuMethodPanel />
 <LoadingOverlay />
 
 {#if contextMenu.show && contextMenu.type === 'a2l'}

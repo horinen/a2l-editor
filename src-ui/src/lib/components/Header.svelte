@@ -2,7 +2,7 @@
   import { fly } from 'svelte/transition';
   import { currentTheme, a2lPath, endianness } from '$lib/stores';
   import { themes, themeNames, applyTheme, cycleTheme } from '$lib/themes';
-  import { showAboutDialog, showGenerateDialog, showHelpDialog, statusMessage, isLoading } from '$lib/stores';
+  import { showAboutDialog, showGenerateDialog, showHelpDialog, showCompuMethodPanel, statusMessage, isLoading } from '$lib/stores';
   import { open } from '@tauri-apps/plugin-dialog';
   import { loadElf, loadPackage, loadA2l, setEndianness, updateA2lAddresses, searchElfEntries, searchA2lVariables } from '$lib/commands';
   import { 
@@ -246,6 +246,7 @@
       {/if}
     </div>
     <button class="icon-btn" onclick={() => showHelpDialog.set(true)}>❓ 手册</button>
+    <button class="icon-btn" onclick={() => showCompuMethodPanel.set(true)} title="转换关系管理" disabled={!$a2lPath}>🔧 转换关系</button>
     <button class="icon-btn" onclick={() => showAboutDialog.set(true)}>ℹ️ 关于</button>
   </div>
   <div class="right">

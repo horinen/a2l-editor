@@ -9,7 +9,8 @@ pub mod elf;
 pub mod types;
 
 pub use a2l::{
-    A2lEntryInfo, A2lGenerator, A2lParser, A2lVariable, AppendResult, ExportKind, SaveResult,
+    A2lEntryInfo, A2lGenerator, A2lParser, A2lVariable, AppendResult, CompuMethod,
+    CompuMethodType, ExportKind, PreviewResult, SaveResult, TabIntpPair, TabVerbPair,
     VariableChanges, VariableEdit,
 };
 pub use data_package::{DataPackage, PackageMeta};

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { 
-    a2lVariables, a2lSelectedNames, statusMessage
+    a2lVariables, a2lSelectedNames, statusMessage, showCompuMethodPanel
   } from '$lib/stores';
-  import { saveA2lChanges, searchA2lVariables } from '$lib/commands';
-  import type { A2lVariable, A2lVariableEdit } from '$lib/types';
+  import { saveA2lChanges, searchA2lVariables, listCompuMethods } from '$lib/commands';
+  import type { A2lVariable, A2lVariableEdit, CompuMethodSummary } from '$lib/types';
 
   const A2L_TYPES = ['UBYTE', 'SBYTE', 'UWORD', 'SWORD', 'ULONG', 'SLONG', 'A_UINT64', 'A_INT64', 'FLOAT32_IEEE', 'FLOAT64_IEEE'];
 
@@ -44,6 +44,45 @@
   } | null>(null);
 
   let isSaving = $state(false);
+  let compuMethodList = $state<CompuMethodSummary[]>([]);
+  let selectedCompuMethod = $state<string>('');
+
+  async function loadCompuMethodList() {
+    try {
+      compuMethodList = await listCompuMethods();
+    } catch {
+      compuMethodList = [];
+    }
+  }
+
+  async function handleCompuMethodChange() {
+    if (!selectedVariable || !selectedCompuMethod) return;
+    if (selectedCompuMethod === '__none__') {
+      selectedCompuMethod = '';
+      return;
+    }
+    const existing = selectedVariable.compu_method || '';
+    if (selectedCompuMethod === existing) return;
+
+    isSaving = true;
+    statusMessage.set('⏳ 正在关联转换关系...');
+    try {
+      const change: A2lVariableEdit = {
+        action: 'modify',
+        originalName: selectedVariable.name,
+        compu_method: selectedCompuMethod,
+      };
+      await saveA2lChanges([change]);
+      const variables = await searchA2lVariables('', 0, 10000);
+      a2lVariables.set(variables);
+      statusMessage.set(`✅ 已关联 ${selectedCompuMethod}`);
+      selectedCompuMethod = '';
+    } catch (e) {
+      statusMessage.set(`❌ 关联失败: ${e}`);
+      selectedCompuMethod = '';
+    }
+    isSaving = false;
+  }
 
   let selectedVariable = $derived.by(() => {
     const names = Array.from($a2lSelectedNames);
@@ -53,6 +92,7 @@
 
   $effect(() => {
     if (selectedVariable) {
+      loadCompuMethodList();
       editBuffer = {
         name: selectedVariable.name,
         address: selectedVariable.address || '',
@@ -203,7 +243,28 @@
 
     <div class="section-divider">
       <span class="section-label">转化系数 (COMPU_METHOD)</span>
+      <button class="manage-btn" onclick={() => showCompuMethodPanel.set(true)}>🔧 管理</button>
     </div>
+
+    {#if compuMethodList.length > 0}
+      <div class="editor-row">
+        <label class="cm-select-label">
+          <span class="field-label">关联</span>
+          <select
+            class="field-select"
+            value={selectedCompuMethod}
+            onchange={handleCompuMethodChange}
+            disabled={isSaving}
+          >
+            <option value="">-- 选择转换关系 --</option>
+            <option value="__none__">NO_COMPU_METHOD</option>
+            {#each compuMethodList as cm}
+              <option value={cm.name}>{cm.name} ({cm.conversion_type})</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+    {/if}
 
     <div class="editor-row">
       <label>
@@ -401,5 +462,25 @@
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+
+  .manage-btn {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+  }
+
+  .manage-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .cm-select-label {
+    width: 100%;
   }
 </style>

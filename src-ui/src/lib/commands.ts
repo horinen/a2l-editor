@@ -9,7 +9,11 @@ import type {
   ExportResult,
   SaveResult,
   UpdateAddressResult,
-  ExportMode 
+  ExportMode,
+  CompuMethodSummary,
+  CompuMethodDetail,
+  CompuMethodInput,
+  PreviewResult,
 } from './types';
 
 // 文件操作
@@ -95,4 +99,28 @@ export async function setEndianness(endianness: 'little' | 'big'): Promise<void>
 
 export async function updateA2lAddresses(): Promise<UpdateAddressResult> {
   return invoke('update_a2l_addresses');
+}
+
+// COMPU_METHOD 管理
+export async function listCompuMethods(): Promise<CompuMethodSummary[]> {
+  return invoke('list_compu_methods');
+}
+
+export async function getCompuMethod(name: string): Promise<CompuMethodDetail> {
+  return invoke('get_compu_method', { name });
+}
+
+export async function saveCompuMethodCmd(method: CompuMethodInput): Promise<void> {
+  return invoke('save_compu_method_cmd', { method });
+}
+
+export async function deleteCompuMethodCmd(name: string): Promise<number> {
+  return invoke('delete_compu_method_cmd', { name });
+}
+
+export async function previewCompuMethodCmd(
+  method: CompuMethodInput,
+  rawValues: number[]
+): Promise<PreviewResult[]> {
+  return invoke('preview_compu_method_cmd', { method, rawValues });
 }

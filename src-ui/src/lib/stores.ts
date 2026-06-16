@@ -100,6 +100,7 @@ export const showExportDialog = writable<boolean>(false);
 export const showGenerateDialog = writable<boolean>(false);
 export const showAboutDialog = writable<boolean>(false);
 export const showHelpDialog = writable<boolean>(false);
+export const showCompuMethodPanel = writable<boolean>(false);
 export const exportMode = writable<'measurement' | 'characteristic'>('measurement');
 export const exportPreview = writable<{ added: number; skipped: number; existing: number } | null>(null);
 

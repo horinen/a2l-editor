@@ -44,6 +44,7 @@
             <li><strong>从 ELF 添加</strong>: 右键选中变量 → 添加为观测变量/标定变量</li>
             <li><strong>手动添加</strong>: 点击 A2L 面板搜索栏右侧 ➕ 按钮，输入变量信息</li>
             <li>手动添加需填写：变量名、地址（十六进制）、数据类型</li>
+            <li><strong>Excel 批量导入</strong>: 📤 导出模板 → 填写 → 📥 导入。表头需含 名称 / link / 变量类型（观测或标定），link 匹配 ELF 符号，同名变量覆盖</li>
           </ul>
         </section>
 
@@ -56,6 +57,54 @@
             <li><strong>删除变量</strong>: 右键变量 → 删除变量</li>
             <li><strong>调整编辑区高度</strong>: 拖拽编辑区域上方的分隔条</li>
             <li><strong>调整列宽</strong>: 拖拽列标题之间的分隔线</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>搜索与排序进阶</h3>
+          <p>搜索框支持锚点语法（大小写不敏感）：</p>
+          <table>
+            <thead>
+              <tr><th>输入</th><th>匹配方式</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>keyword</code></td><td>包含匹配（默认）</td></tr>
+              <tr><td><code>^keyword</code></td><td>前缀匹配（以…开头）</td></tr>
+              <tr><td><code>keyword$</code></td><td>后缀匹配（以…结尾）</td></tr>
+              <tr><td><code>^keyword$</code></td><td>精确匹配</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li><strong>自然排序</strong>: 搜索框右侧 <code>Aa</code> / <code>1a</code> 按钮切换。自然序按数值比较（v1, v2, v10），字典序逐字符比较（v1, v10, v2）</li>
+            <li>两个面板（A2L / ELF）排序模式各自独立</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>转化系数 (COMPU_METHOD)</h3>
+          <p>选中单个变量后，编辑区的「转化系数」区块：</p>
+          <ul>
+            <li><strong>F (斜率) + OFFSET (偏移)</strong>: 两者必须同时填写，保存时自动生成 LINEAR 类型的 COMPU_METHOD</li>
+            <li><strong>Unit (单位)</strong>: 可独立修改</li>
+            <li><strong>🔧 转换关系面板</strong>: Header 顶部按钮，支持新建/删除 COMPU_METHOD，类型含 LINEAR / TAB_VERB / TAB_INTP / IDENTICAL，可预览转换结果</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>更新 A2L 地址</h3>
+          <p>ELF 重新编译后地址变化时使用。</p>
+          <ul>
+            <li>入口: 文件 → 🔄 更新 A2L 地址</li>
+            <li>按变量名在 ELF 中查找，找到则更新地址，找不到则跳过（不删除）</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>最近文件与自动加载</h3>
+          <ul>
+            <li><strong>最近列表</strong>: 文件菜单中 ELF / A2L 各显示最近 5 条，点击快速加载，底部可清除记录</li>
+            <li><strong>启动恢复</strong>: 自动恢复上次打开的 ELF 和 A2L，失效文件自动移除</li>
+            <li><strong>记忆目录</strong>: 打开对话框自动定位到上次目录</li>
           </ul>
         </section>
 

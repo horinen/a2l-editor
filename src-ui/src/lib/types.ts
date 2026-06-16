@@ -92,3 +92,53 @@ export interface ExcelImportResult {
   skipped: number;
   notFound: string[];
 }
+
+export type CompuMethodType = 'LINEAR' | 'TAB_VERB' | 'TAB_INTP' | 'IDENTICAL';
+
+export interface TabVerbPair {
+  in_val: number;
+  verbal: string;
+}
+
+export interface TabIntpPair {
+  in_val: number;
+  out_val: number;
+}
+
+export interface CompuMethodDetail {
+  name: string;
+  conversion_type: CompuMethodType;
+  unit: string;
+  description: string;
+  f: number;
+  offset: number;
+  verb_pairs: TabVerbPair[];
+  default_value: string;
+  intp_pairs: TabIntpPair[];
+}
+
+export interface CompuMethodSummary {
+  name: string;
+  conversion_type: CompuMethodType;
+  summary: string;
+  unit: string;
+  ref_count: number;
+}
+
+export interface CompuMethodInput {
+  name: string;
+  conversion_type: CompuMethodType;
+  unit: string;
+  description: string;
+  f: number;
+  offset: number;
+  verb_pairs: TabVerbPair[];
+  default_value: string;
+  intp_pairs: TabIntpPair[];
+}
+
+export interface PreviewResult {
+  raw: number;
+  physical: number | null;
+  verbal: string | null;
+}

@@ -69,12 +69,75 @@ pub struct A2lGenerator {
     entries: Vec<A2lEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(non_camel_case_types)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CompuMethodType {
+    LINEAR,
+    TAB_VERB,
+    TAB_INTP,
+    IDENTICAL,
+}
+
+impl std::fmt::Display for CompuMethodType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompuMethodType::LINEAR => write!(f, "LINEAR"),
+            CompuMethodType::TAB_VERB => write!(f, "TAB_VERB"),
+            CompuMethodType::TAB_INTP => write!(f, "TAB_INTP"),
+            CompuMethodType::IDENTICAL => write!(f, "IDENTICAL"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabVerbPair {
+    pub in_val: f64,
+    pub verbal: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabIntpPair {
+    pub in_val: f64,
+    pub out_val: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompuMethod {
     pub name: String,
+    pub conversion_type: CompuMethodType,
+    pub unit: String,
+    pub description: String,
     pub f: f64,
     pub offset: f64,
-    pub unit: String,
+    pub verb_pairs: Vec<TabVerbPair>,
+    pub default_value: String,
+    pub intp_pairs: Vec<TabIntpPair>,
+}
+
+impl CompuMethod {
+    pub fn linear(name: &str, f: f64, offset: f64, unit: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            conversion_type: CompuMethodType::LINEAR,
+            unit: unit.to_string(),
+            description: format!("y = {} * x + {}", f, offset),
+            f,
+            offset,
+            verb_pairs: Vec::new(),
+            default_value: String::new(),
+            intp_pairs: Vec::new(),
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        match self.conversion_type {
+            CompuMethodType::LINEAR => format!("y = {} * x + {}", self.f, self.offset),
+            CompuMethodType::TAB_VERB => format!("{} 项文字表", self.verb_pairs.len()),
+            CompuMethodType::TAB_INTP => format!("{} 项插值表", self.intp_pairs.len()),
+            CompuMethodType::IDENTICAL => "无转换".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1334,17 +1397,33 @@ impl A2lParser {
 
     fn parse_compu_method_block(block_lines: &[&str]) -> Option<CompuMethod> {
         let mut name = String::new();
+        let mut description = String::new();
+        let mut conversion_type_str = String::new();
+        let mut unit = String::new();
         let mut f = 1.0;
         let mut offset = 0.0;
-        let mut unit = String::new();
+        let mut verb_pairs: Vec<TabVerbPair> = Vec::new();
+        let mut default_value = String::new();
+        let mut intp_pairs: Vec<TabIntpPair> = Vec::new();
+
+        let mut full_block = block_lines.join("\n");
 
         for line in block_lines {
             let trimmed = line.trim();
 
             if trimmed.starts_with("/begin COMPU_METHOD") {
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
                 if parts.len() >= 3 {
                     name = parts[2].to_string();
+                }
+                if trimmed.starts_with('"') {
+                    if let Some(start) = trimmed.find('"') {
+                        if let Some(end) = trimmed.rfind('"') {
+                            if end > start {
+                                description = trimmed[start + 1..end].to_string();
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -1358,25 +1437,123 @@ impl A2lParser {
                 continue;
             }
 
-            if trimmed.starts_with("LINEAR") {
+            if trimmed.starts_with("LINEAR")
+                || trimmed.starts_with("TAB_VERB")
+                || trimmed.starts_with("TAB_INTP")
+                || trimmed.starts_with("IDENTICAL")
+            {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                conversion_type_str = parts[0].to_string();
                 if parts.len() >= 4 {
                     unit = parts[3].trim_matches('"').to_string();
                 }
                 continue;
             }
+
+            if trimmed.starts_with("DEFAULT_VALUE") {
+                let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+                if parts.len() >= 2 {
+                    default_value = parts[1].trim().trim_matches('"').to_string();
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("COMPU_VTAB") {
+                let rest = trimmed.trim_start_matches("COMPU_VTAB");
+                verb_pairs = Self::parse_verb_pairs(rest);
+                continue;
+            }
+
+            if trimmed.starts_with("COMPU_TAB") {
+                let rest = trimmed.trim_start_matches("COMPU_TAB");
+                let pairs = Self::parse_intp_pairs_from_block(rest);
+                intp_pairs = pairs;
+                continue;
+            }
         }
 
         if name.is_empty() || name == "NO_COMPU_METHOD" {
-            None
-        } else {
-            Some(CompuMethod {
-                name,
-                f,
-                offset,
-                unit,
-            })
+            return None;
         }
+
+        let conversion_type = match conversion_type_str.as_str() {
+            "TAB_VERB" => CompuMethodType::TAB_VERB,
+            "TAB_INTP" => CompuMethodType::TAB_INTP,
+            "IDENTICAL" => CompuMethodType::IDENTICAL,
+            _ => CompuMethodType::LINEAR,
+        };
+
+        if description.is_empty() {
+            match conversion_type {
+                CompuMethodType::LINEAR => {
+                    description = format!("y = {} * x + {}", f, offset);
+                }
+                _ => {}
+            }
+        }
+
+        let _ = &mut full_block;
+
+        Some(CompuMethod {
+            name,
+            conversion_type,
+            unit,
+            description,
+            f,
+            offset,
+            verb_pairs,
+            default_value,
+            intp_pairs,
+        })
+    }
+
+    fn parse_verb_pairs(rest: &str) -> Vec<TabVerbPair> {
+        let mut pairs = Vec::new();
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        let mut i = 0;
+        while i + 1 < tokens.len() {
+            if let Ok(in_val) = tokens[i].parse::<f64>() {
+                let verbal = tokens[i + 1].trim_matches('"').to_string();
+                pairs.push(TabVerbPair { in_val, verbal });
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        pairs
+    }
+
+    fn parse_intp_pairs_from_block(rest: &str) -> Vec<TabIntpPair> {
+        let mut pairs = Vec::new();
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        let mut i = 0;
+        if tokens.len() >= 2 {
+            if let Ok(num_pairs) = tokens[0].parse::<usize>() {
+                let _ = tokens[1].parse::<usize>();
+                i = 2;
+                while i + 1 < tokens.len() && pairs.len() < num_pairs {
+                    if let Ok(in_val) = tokens[i].parse::<f64>() {
+                        if let Ok(out_val) = tokens[i + 1].parse::<f64>() {
+                            pairs.push(TabIntpPair { in_val, out_val });
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+        while i + 1 < tokens.len() {
+            if let Ok(in_val) = tokens[i].parse::<f64>() {
+                if let Ok(out_val) = tokens[i + 1].parse::<f64>() {
+                    pairs.push(TabIntpPair { in_val, out_val });
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        pairs
     }
 
     fn parse_compu_method_coeffs(method_name: &str) -> (Option<f64>, Option<f64>, Option<String>) {
@@ -1406,4 +1583,251 @@ impl A2lParser {
             (None, None, None)
         }
     }
+
+    pub fn generate_compu_method_block_generic(method: &CompuMethod) -> String {
+        let display_unit = if method.unit.is_empty() { "" } else { method.unit.as_str() };
+        let format_str = A2lGenerator::get_format_string_for_compu();
+        let desc = if method.description.is_empty() {
+            method.summary()
+        } else {
+            method.description.clone()
+        };
+
+        match method.conversion_type {
+            CompuMethodType::LINEAR => {
+                format!(
+                    "    /begin COMPU_METHOD\n      {} \"{}\"\n      LINEAR \"{}\" \"{}\" \"{}\"\n      COEFFS {} {} 0.0 0.0 0.0 0.0\n    /end COMPU_METHOD\n\n",
+                    method.name, desc, format_str, display_unit, display_unit, method.f, method.offset
+                )
+            }
+            CompuMethodType::IDENTICAL => {
+                format!(
+                    "    /begin COMPU_METHOD\n      {} \"{}\"\n      IDENTICAL \"\" \"{}\" \"{}\"\n    /end COMPU_METHOD\n\n",
+                    method.name, desc, display_unit, display_unit
+                )
+            }
+            CompuMethodType::TAB_VERB => {
+                let mut vtab_line = String::new();
+                for pair in &method.verb_pairs {
+                    let val = if pair.in_val == pair.in_val.trunc() {
+                        pair.in_val as i64
+                    } else {
+                        pair.in_val as f64 as i64
+                    };
+                    vtab_line.push_str(&format!(" {} \"{}\"", val, pair.verbal));
+                }
+                let default_line = if method.default_value.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n      DEFAULT_VALUE \"{}\"", method.default_value)
+                };
+                format!(
+                    "    /begin COMPU_METHOD\n      {} \"{}\"\n      TAB_VERB \"\" \"{}\" \"{}\"{}\n      COMPU_VTAB{}\n    /end COMPU_METHOD\n\n",
+                    method.name, desc, display_unit, display_unit, default_line, vtab_line
+                )
+            }
+            CompuMethodType::TAB_INTP => {
+                let count = method.intp_pairs.len();
+                let mut tab_lines = String::new();
+                for pair in &method.intp_pairs {
+                    tab_lines.push_str(&format!("\n      {} {}", pair.in_val, pair.out_val));
+                }
+                format!(
+                    "    /begin COMPU_METHOD\n      {} \"{}\"\n      TAB_INTP \"{}\" \"{}\" \"{}\"\n      COMPU_TAB {} 2{}\n    /end COMPU_METHOD\n\n",
+                    method.name, desc, format_str, display_unit, display_unit, count, tab_lines
+                )
+            }
+        }
+    }
+
+    pub fn save_compu_method(content: &str, method: &CompuMethod) -> Result<String> {
+        let block = Self::generate_compu_method_block_generic(method);
+        let begin_marker = format!("/begin COMPU_METHOD");
+        let end_marker = "/end COMPU_METHOD";
+
+        let mut find_result: Option<(usize, usize)> = None;
+        let mut search_start = 0;
+        loop {
+            if let Some(begin_pos) = content[search_start..].find(begin_marker.as_str()) {
+                let abs_begin = search_start + begin_pos;
+                if let Some(rel_end) = content[abs_begin..].find(end_marker) {
+                    let abs_end = abs_begin + rel_end + end_marker.len();
+                    let block_text = &content[abs_begin..abs_end];
+                    let tokens: Vec<&str> = block_text.split_whitespace().collect();
+                    if tokens.len() >= 3 && tokens[2] == method.name {
+                        let line_start = content[..abs_begin].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                        let line_end = content[abs_end..].find('\n').map(|p| abs_end + p + 1).unwrap_or(content.len());
+                        find_result = Some((line_start, line_end));
+                        break;
+                    }
+                    search_start = abs_end;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if let Some((start, end)) = find_result {
+            let mut result = String::new();
+            result.push_str(&content[..start]);
+            result.push_str(&block);
+            result.push_str(&content[end..]);
+            Ok(result)
+        } else {
+            let insert_pos = content
+                .rfind("/end COMPU_METHOD")
+                .or_else(|| content.find("/begin MEASUREMENT"))
+                .or_else(|| content.find("/begin CHARACTERISTIC"))
+                .or_else(|| content.rfind("/end MODULE"))
+                .unwrap_or(content.len());
+
+            let actual_insert_pos = {
+                let before = &content[..insert_pos];
+                if let Some(last_newline) = before.rfind('\n') {
+                    let line_start = last_newline + 1;
+                    let prefix = &content[line_start..insert_pos];
+                    if prefix.chars().all(|c| c.is_whitespace()) {
+                        line_start
+                    } else {
+                        insert_pos
+                    }
+                } else {
+                    0
+                }
+            };
+
+            let mut result = String::new();
+            result.push_str(&content[..actual_insert_pos]);
+            result.push_str(&block);
+            result.push_str(&content[actual_insert_pos..]);
+            Ok(result)
+        }
+    }
+
+    pub fn delete_compu_method(content: &str, name: &str) -> Result<String> {
+        let begin_marker = "/begin COMPU_METHOD";
+        let end_marker = "/end COMPU_METHOD";
+
+        let mut find_result: Option<(usize, usize)> = None;
+        let mut search_start = 0;
+        loop {
+            if let Some(begin_pos) = content[search_start..].find(begin_marker) {
+                let abs_begin = search_start + begin_pos;
+                if let Some(rel_end) = content[abs_begin..].find(end_marker) {
+                    let abs_end = abs_begin + rel_end + end_marker.len();
+                    let block_text = &content[abs_begin..abs_end];
+                    let tokens: Vec<&str> = block_text.split_whitespace().collect();
+                    if tokens.len() >= 3 && tokens[2] == name {
+                        let line_start = content[..abs_begin].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                        let line_end = content[abs_end..].find('\n').map(|p| abs_end + p + 1).unwrap_or(content.len());
+                        find_result = Some((line_start, line_end));
+                        break;
+                    }
+                    search_start = abs_end;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if let Some((start, end)) = find_result {
+            let mut result = String::new();
+            result.push_str(&content[..start]);
+            result.push_str(&content[end..]);
+            Ok(result)
+        } else {
+            Ok(content.to_string())
+        }
+    }
+
+    pub fn count_compu_method_refs(content: &str, name: &str) -> usize {
+        let variables = A2lParser::parse_all_variables(content);
+        variables.iter().filter(|v| v.compu_method.as_deref() == Some(name)).count()
+    }
+
+    pub fn preview_compu_method(method: &CompuMethod, raw_values: &[f64]) -> Vec<PreviewResult> {
+        raw_values
+            .iter()
+            .map(|&raw| {
+                match method.conversion_type {
+                    CompuMethodType::LINEAR => PreviewResult {
+                        raw,
+                        physical: Some(method.f * raw + method.offset),
+                        verbal: None,
+                    },
+                    CompuMethodType::IDENTICAL => PreviewResult {
+                        raw,
+                        physical: Some(raw),
+                        verbal: None,
+                    },
+                    CompuMethodType::TAB_VERB => {
+                        let verbal = method
+                            .verb_pairs
+                            .iter()
+                            .find(|p| (p.in_val - raw).abs() < f64::EPSILON)
+                            .map(|p| p.verbal.clone())
+                            .unwrap_or_else(|| {
+                                if method.default_value.is_empty() {
+                                    "N/A".to_string()
+                                } else {
+                                    method.default_value.clone()
+                                }
+                            });
+                        PreviewResult {
+                            raw,
+                            physical: None,
+                            verbal: Some(verbal),
+                        }
+                    }
+                    CompuMethodType::TAB_INTP => {
+                        let physical = if method.intp_pairs.is_empty() {
+                            raw
+                        } else if method.intp_pairs.len() == 1 {
+                            method.intp_pairs[0].out_val
+                        } else {
+                            let first = method.intp_pairs.first().unwrap();
+                            let last = method.intp_pairs.last().unwrap();
+                            if raw <= first.in_val {
+                                first.out_val
+                            } else if raw >= last.in_val {
+                                last.out_val
+                            } else {
+                                let mut result = last.out_val;
+                                for window in method.intp_pairs.windows(2) {
+                                    let (p0, p1) = (window[0].clone(), window[1].clone());
+                                    if raw >= p0.in_val && raw <= p1.in_val {
+                                        let denom = p1.in_val - p0.in_val;
+                                        if denom.abs() < f64::EPSILON {
+                                            result = p0.out_val;
+                                        } else {
+                                            let t = (raw - p0.in_val) / denom;
+                                            result = p0.out_val + t * (p1.out_val - p0.out_val);
+                                        }
+                                        break;
+                                    }
+                                }
+                                result
+                            }
+                        };
+                        PreviewResult {
+                            raw,
+                            physical: Some(physical),
+                            verbal: None,
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewResult {
+    pub raw: f64,
+    pub physical: Option<f64>,
+    pub verbal: Option<String>,
 }

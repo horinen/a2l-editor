@@ -1,6 +1,7 @@
 use a2l_editor::{
-    A2lEntry, A2lEntryInfo, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, DataPackage,
-    ElfParser, Endianness, ExportKind, PackageMeta, SaveResult, VariableChanges, VariableEdit,
+    A2lEntry, A2lEntryInfo, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, CompuMethod,
+    CompuMethodType, DataPackage, ElfParser, Endianness, ExportKind, PackageMeta, PreviewResult,
+    SaveResult, TabIntpPair, TabVerbPair, VariableChanges, VariableEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -690,4 +691,175 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
     state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
 
     Ok(UpdateAddressResult { updated, skipped })
+}
+
+#[derive(Serialize)]
+pub struct CompuMethodSummary {
+    pub name: String,
+    pub conversion_type: String,
+    pub summary: String,
+    pub unit: String,
+    pub ref_count: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CompuMethodInput {
+    pub name: String,
+    pub conversion_type: String,
+    pub unit: String,
+    pub description: String,
+    pub f: f64,
+    pub offset: f64,
+    pub verb_pairs: Vec<TabVerbPairInput>,
+    pub default_value: String,
+    pub intp_pairs: Vec<TabIntpPairInput>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TabVerbPairInput {
+    pub in_val: f64,
+    pub verbal: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TabIntpPairInput {
+    pub in_val: f64,
+    pub out_val: f64,
+}
+
+impl From<CompuMethodInput> for CompuMethod {
+    fn from(input: CompuMethodInput) -> Self {
+        let conversion_type = match input.conversion_type.as_str() {
+            "TAB_VERB" => CompuMethodType::TAB_VERB,
+            "TAB_INTP" => CompuMethodType::TAB_INTP,
+            "IDENTICAL" => CompuMethodType::IDENTICAL,
+            _ => CompuMethodType::LINEAR,
+        };
+        CompuMethod {
+            name: input.name,
+            conversion_type,
+            unit: input.unit,
+            description: input.description,
+            f: input.f,
+            offset: input.offset,
+            verb_pairs: input
+                .verb_pairs
+                .into_iter()
+                .map(|p| TabVerbPair {
+                    in_val: p.in_val,
+                    verbal: p.verbal,
+                })
+                .collect(),
+            default_value: input.default_value,
+            intp_pairs: input
+                .intp_pairs
+                .into_iter()
+                .map(|p| TabIntpPair {
+                    in_val: p.in_val,
+                    out_val: p.out_val,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_compu_methods(
+    state: State<Mutex<AppState>>,
+) -> Result<Vec<CompuMethodSummary>, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    let a2l_path = state.a2l_path.as_ref().ok_or("未加载 A2L 文件")?;
+    let content = read_a2l_file(a2l_path)?;
+    let methods = A2lParser::parse_compu_methods(&content);
+    let variables = &state.a2l_variables;
+
+    let summaries: Vec<CompuMethodSummary> = methods
+        .iter()
+        .map(|m| {
+            let ref_count = variables
+                .iter()
+                .filter(|v| v.compu_method.as_deref() == Some(&m.name))
+                .count();
+            CompuMethodSummary {
+                name: m.name.clone(),
+                conversion_type: m.conversion_type.to_string(),
+                summary: m.summary(),
+                unit: m.unit.clone(),
+                ref_count,
+            }
+        })
+        .collect();
+
+    Ok(summaries)
+}
+
+#[tauri::command]
+pub fn get_compu_method(
+    name: String,
+    state: State<Mutex<AppState>>,
+) -> Result<CompuMethod, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    let a2l_path = state.a2l_path.as_ref().ok_or("未加载 A2L 文件")?;
+    let content = read_a2l_file(a2l_path)?;
+    let methods = A2lParser::parse_compu_methods(&content);
+
+    methods
+        .into_iter()
+        .find(|m| m.name == name)
+        .ok_or_else(|| format!("未找到 COMPU_METHOD: {}", name))
+}
+
+#[tauri::command]
+pub fn save_compu_method_cmd(
+    method: CompuMethodInput,
+    state: State<Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let a2l_path = state.a2l_path.as_ref().ok_or("未加载 A2L 文件")?;
+    let content = read_a2l_file(a2l_path)?;
+
+    let cm: CompuMethod = method.into();
+    let new_content = A2lParser::save_compu_method(&content, &cm)
+        .map_err(|e| format!("保存 COMPU_METHOD 失败: {}", e))?;
+
+    std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
+
+    let variables = A2lParser::parse_all_variables(&read_a2l_file(a2l_path)?);
+    state.a2l_variables = variables;
+    state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_compu_method_cmd(
+    name: String,
+    state: State<Mutex<AppState>>,
+) -> Result<usize, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let a2l_path = state.a2l_path.as_ref().ok_or("未加载 A2L 文件")?;
+    let content = read_a2l_file(a2l_path)?;
+
+    let ref_count = A2lParser::count_compu_method_refs(&content, &name);
+
+    let new_content = A2lParser::delete_compu_method(&content, &name)
+        .map_err(|e| format!("删除 COMPU_METHOD 失败: {}", e))?;
+
+    std::fs::write(a2l_path, new_content).map_err(|e| format!("写入 A2L 文件失败: {}", e))?;
+
+    let variables = A2lParser::parse_all_variables(&read_a2l_file(a2l_path)?);
+    state.a2l_variables = variables;
+    state.a2l_names = state.a2l_variables.iter().map(|v| v.name.clone()).collect();
+
+    Ok(ref_count)
+}
+
+#[tauri::command]
+pub fn preview_compu_method_cmd(
+    method: CompuMethodInput,
+    raw_values: Vec<f64>,
+) -> Result<Vec<PreviewResult>, String> {
+    let cm: CompuMethod = method.into();
+    let results = A2lParser::preview_compu_method(&cm, &raw_values);
+    Ok(results)
 }
