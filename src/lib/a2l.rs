@@ -312,13 +312,13 @@ impl A2lGenerator {
         output
     }
 
-    fn generate_characteristic_block_with_compu(
+    fn generate_characteristic_block_with_record_layout(
         entry: &A2lEntry,
         compu_method: Option<&str>,
         endianness: Endianness,
+        record_layout: &str,
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
-        let record_layout = Self::get_record_layout(a2l_type);
 
         let max_val = if entry.is_bitfield() {
             let size = entry.bit_size.unwrap();
@@ -412,6 +412,95 @@ impl A2lGenerator {
             "FLOAT64_IEEE" => "__Float64_Value",
             _ => "__ULong_Value",
         }
+    }
+
+    fn parse_record_layout_names(content: &str) -> HashSet<String> {
+        let mut names = HashSet::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("/begin RECORD_LAYOUT") {
+                if let Some(name) = rest.split_whitespace().next() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        names
+    }
+
+    fn get_record_layout_for_content(a2l_type: &str, layouts: &HashSet<String>) -> String {
+        let candidates: &[&str] = match a2l_type {
+            "UBYTE" => &["UByte", "__UBYTE_Z", "__UBYTE_S", "__UByte_Value"],
+            "SBYTE" => &["SByte", "__SBYTE_Z", "__SBYTE_S", "__SByte_Value"],
+            "UWORD" => &["UWord", "__UWORD_Z", "__UWORD_S", "__UWord_Value"],
+            "SWORD" => &["SWord", "__SWORD_Z", "__SWORD_S", "__SWord_Value"],
+            "ULONG" => &["ULong", "__ULONG_Z", "__ULONG_S", "__ULong_Value"],
+            "SLONG" => &["SLong", "__SLONG_Z", "__SLONG_S", "__SLong_Value"],
+            "A_UINT64" => &["__A_UINT64_Z", "__A_UINT64_S", "__UInt64_Value"],
+            "A_INT64" => &["__A_INT64_Z", "__A_INT64_S", "__Int64_Value"],
+            "FLOAT32_IEEE" => &["__FLOAT32_IEEE_Z", "__FLOAT32_IEEE_S", "__Float32_Value"],
+            "FLOAT64_IEEE" => &["__FLOAT64_IEEE_Z", "__FLOAT64_IEEE_S", "__Float64_Value"],
+            _ => &["__ULong_Value"],
+        };
+
+        candidates
+            .iter()
+            .find(|name| layouts.contains(**name))
+            .copied()
+            .unwrap_or_else(|| Self::get_record_layout(a2l_type))
+            .to_string()
+    }
+
+    fn line_start_for_pos(content: &str, pos: usize) -> usize {
+        let before = &content[..pos];
+        if let Some(last_newline) = before.rfind('\n') {
+            let line_start = last_newline + 1;
+            let prefix = &content[line_start..pos];
+            if prefix.chars().all(|c| c.is_whitespace()) {
+                return line_start;
+            }
+        }
+        pos
+    }
+
+    fn line_end_after_pos(content: &str, pos: usize) -> usize {
+        content[pos..]
+            .find('\n')
+            .map(|offset| pos + offset + 1)
+            .unwrap_or(content.len())
+    }
+
+    fn variable_insert_pos(content: &str) -> Result<usize> {
+        let first_definition_pos = [
+            "/begin COMPU_METHOD",
+            "/begin COMPU_TAB",
+            "/begin COMPU_VTAB",
+            "/begin RECORD_LAYOUT",
+            "/begin GROUP",
+        ]
+        .iter()
+        .filter_map(|marker| content.find(marker))
+        .min();
+
+        let search_end = first_definition_pos.unwrap_or(content.len());
+        let search_region = &content[..search_end];
+        let last_variable_end = search_region
+            .rfind("/end MEASUREMENT")
+            .into_iter()
+            .chain(search_region.rfind("/end CHARACTERISTIC"))
+            .max();
+
+        if let Some(pos) = last_variable_end {
+            return Ok(Self::line_end_after_pos(content, pos));
+        }
+
+        if let Some(pos) = first_definition_pos {
+            return Ok(Self::line_start_for_pos(content, pos));
+        }
+
+        content
+            .rfind("/end MODULE")
+            .map(|pos| Self::line_start_for_pos(content, pos))
+            .with_context(|| "无法找到合适的插入位置")
     }
 
     fn get_format_string(a2l_type: &str) -> &'static str {
@@ -535,6 +624,7 @@ impl A2lGenerator {
         let content = read_file_lossy(path)?;
 
         let existing_names = Self::parse_existing_names(&content);
+        let record_layouts = Self::parse_record_layout_names(&content);
 
         let (to_add, to_skip): (Vec<_>, Vec<_>) = entries
             .iter()
@@ -547,36 +637,19 @@ impl A2lGenerator {
                     Self::generate_measurement_block_with_compu(e, None, endianness)
                 }
                 ExportKind::Characteristic => {
-                    Self::generate_characteristic_block_with_compu(e, None, endianness)
+                    let record_layout =
+                        Self::get_record_layout_for_content(&e.a2l_type, &record_layouts);
+                    Self::generate_characteristic_block_with_record_layout(
+                        e,
+                        None,
+                        endianness,
+                        &record_layout,
+                    )
                 }
             })
             .collect();
 
-        // 优先找到第一个 /begin GROUP 的位置，如果没有则使用 /end MODULE
-        let insert_pos = content
-            .find("/begin GROUP")
-            .or_else(|| {
-                content
-                    .rfind("/end MEASUREMENT")
-                    .or_else(|| content.rfind("/end MODULE"))
-            })
-            .with_context(|| "无法找到合适的插入位置")?;
-
-        // 修复缩进问题：如果插入位置所在行只有空白字符，则移动到行首
-        let actual_insert_pos = {
-            let before = &content[..insert_pos];
-            if let Some(last_newline) = before.rfind('\n') {
-                let line_start = last_newline + 1;
-                let prefix = &content[line_start..insert_pos];
-                if prefix.chars().all(|c| c.is_whitespace()) {
-                    line_start
-                } else {
-                    insert_pos
-                }
-            } else {
-                0
-            }
-        };
+        let actual_insert_pos = Self::variable_insert_pos(&content)?;
 
         let new_content = format!(
             "{}{}{}",
@@ -994,6 +1067,7 @@ impl A2lGenerator {
         };
 
         let existing_names = Self::parse_existing_names(content);
+        let record_layouts = Self::parse_record_layout_names(content);
 
         let existing_compu_methods = A2lParser::parse_compu_methods(content);
         let mut compu_method_map: HashMap<String, String> = existing_compu_methods
@@ -1113,34 +1187,19 @@ impl A2lGenerator {
                                     )
                                 }
                                 ExportKind::Characteristic => {
-                                    Self::generate_characteristic_block_with_compu(
+                                    let record_layout = Self::get_record_layout_for_content(
+                                        &entry.a2l_type,
+                                        &record_layouts,
+                                    );
+                                    Self::generate_characteristic_block_with_record_layout(
                                         &entry,
                                         compu_method,
                                         endianness,
+                                        &record_layout,
                                     )
                                 }
                             };
-                            let insert_pos = result
-                                .find("/begin GROUP")
-                                .or_else(|| result.rfind("/end MEASUREMENT"))
-                                .or_else(|| result.rfind("/end CHARACTERISTIC"))
-                                .or_else(|| result.rfind("/end MODULE"))
-                                .unwrap_or(result.len());
-
-                            let actual_insert_pos = {
-                                let before = &result[..insert_pos];
-                                if let Some(last_newline) = before.rfind('\n') {
-                                    let line_start = last_newline + 1;
-                                    let prefix = &result[line_start..insert_pos];
-                                    if prefix.chars().all(|c| c.is_whitespace()) {
-                                        line_start
-                                    } else {
-                                        insert_pos
-                                    }
-                                } else {
-                                    0
-                                }
-                            };
+                            let actual_insert_pos = Self::variable_insert_pos(&result)?;
 
                             result = format!(
                                 "{}{}{}",
