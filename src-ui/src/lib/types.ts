@@ -17,6 +17,7 @@ export interface A2lVariable {
   var_type: 'MEASUREMENT' | 'CHARACTERISTIC';
   bit_mask: string | null;
   compu_method: string | null;
+  symbol_link: string | null;
   f: number | null;
   offset: number | null;
   unit: string | null;

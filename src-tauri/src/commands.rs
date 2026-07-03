@@ -176,6 +176,7 @@ pub struct VariableInfo {
     pub var_type: String,
     pub bit_mask: Option<String>,
     pub compu_method: Option<String>,
+    pub symbol_link: Option<String>,
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
@@ -190,6 +191,7 @@ impl From<&A2lVariable> for VariableInfo {
             var_type: var.var_type.clone(),
             bit_mask: var.bit_mask.clone(),
             compu_method: var.compu_method.clone(),
+            symbol_link: var.symbol_link.clone(),
             f: var.f,
             offset: var.offset,
             unit: var.unit.clone(),
@@ -641,7 +643,13 @@ pub fn update_a2l_addresses(state: State<Mutex<AppState>>) -> Result<UpdateAddre
     let mut skipped = 0;
 
     for var in &state.a2l_variables {
-        if let Some(entry) = store.get_by_name(&var.name) {
+        let entry = store.get_by_name(&var.name).or_else(|| {
+            var.symbol_link
+                .as_deref()
+                .and_then(|name| store.get_by_name(name))
+        });
+
+        if let Some(entry) = entry {
             let new_address = format!("0x{:08X}", entry.address);
             edits.push(VariableEdit {
                 action: "modify".to_string(),

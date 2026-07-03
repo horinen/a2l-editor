@@ -160,6 +160,7 @@ pub struct A2lVariable {
     pub data_type: String,
     pub bit_mask: Option<String>,
     pub compu_method: Option<String>,
+    pub symbol_link: Option<String>,
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
@@ -935,6 +936,7 @@ impl A2lGenerator {
 
         let begin_re = Regex::new(r"^(\s*/begin\s+(?:MEASUREMENT|CHARACTERISTIC)\s+)\S+")?;
         let ecu_addr_re = Regex::new(r"^(\s*ECU_ADDRESS\s+)(0x[0-9a-fA-F]+)")?;
+        let value_addr_re = Regex::new(r"^(\s*VALUE\s+)(0x[0-9a-fA-F]+)(\s+.*)$")?;
         let link_map_addr_re = Regex::new(r#"^(.*LINK_MAP\s+"[^"]+"\s+)(0x[0-9a-fA-F]+)(.*)$"#)?;
         let data_type_re = Regex::new(&format!(
             "^(\\s*)({})(\\s+)(\\S+)(\\s+.*)$",
@@ -982,6 +984,11 @@ impl A2lGenerator {
             if !new_address.is_empty() {
                 if let Some(caps) = ecu_addr_re.captures(line) {
                     result.push_str(&format!("{}{}\n", &caps[1], final_address));
+                    continue;
+                }
+
+                if let Some(caps) = value_addr_re.captures(line) {
+                    result.push_str(&format!("{}{}{}\n", &caps[1], final_address, &caps[3]));
                     continue;
                 }
 
@@ -1305,6 +1312,7 @@ impl A2lParser {
         let mut data_type = String::new();
         let mut bit_mask = None;
         let mut compu_method = None;
+        let mut symbol_link = None;
         let mut found_first_name = false;
 
         let a2l_types = [
@@ -1395,6 +1403,12 @@ impl A2lParser {
                     bit_mask = Some(parts[mask_pos + 1].to_string());
                 }
             }
+
+            if let Some(link_pos) = parts.iter().position(|&x| x == "SYMBOL_LINK") {
+                if link_pos + 1 < parts.len() {
+                    symbol_link = Some(parts[link_pos + 1].trim_matches('"').to_string());
+                }
+            }
         }
 
         let (f, offset, unit) = if let Some(ref cm) = compu_method {
@@ -1414,6 +1428,7 @@ impl A2lParser {
             data_type,
             bit_mask,
             compu_method,
+            symbol_link,
             f,
             offset,
             unit,
@@ -1889,4 +1904,72 @@ pub struct PreviewResult {
     pub raw: f64,
     pub physical: Option<f64>,
     pub verbal: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_symbol_link_from_a2l_variable() {
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin MEASUREMENT DisplayName ""
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x00000000
+      SYMBOL_LINK "RealSymbol" 0
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT
+"#;
+
+        let variables = A2lParser::parse_all_variables(content);
+
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "DisplayName");
+        assert_eq!(variables[0].symbol_link.as_deref(), Some("RealSymbol"));
+    }
+
+    #[test]
+    fn updates_characteristic_value_and_link_map_addresses() {
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin CHARACTERISTIC CalValue ""
+      VALUE 0x00000000 UWord 0 NO_COMPU_METHOD 0 65535
+      /begin IF_DATA CANAPE_EXT
+        100
+        LINK_MAP "CalValue" 0x00000000 0 0 0 1 0x8F 0
+      /end IF_DATA
+    /end CHARACTERISTIC
+  /end MODULE
+/end PROJECT
+"#;
+        let edits = vec![VariableEdit {
+            action: "modify".to_string(),
+            original_name: "CalValue".to_string(),
+            changes: Some(VariableChanges {
+                name: None,
+                address: Some("0x20000026".to_string()),
+                data_type: None,
+                var_type: None,
+                bit_mask: None,
+                compu_method: None,
+                f: None,
+                offset: None,
+                unit: None,
+                symbol_link: None,
+            }),
+            entry: None,
+            export_mode: None,
+        }];
+
+        let (updated, result) =
+            A2lGenerator::apply_changes(content, &edits, Endianness::Little).unwrap();
+
+        assert_eq!(result.modified, 1);
+        assert!(updated.contains("VALUE 0x20000026 UWord 0 NO_COMPU_METHOD 0 65535"));
+        assert!(updated.contains("LINK_MAP \"CalValue\" 0x20000026 0 0 0 1 0x8F 0"));
+    }
 }
