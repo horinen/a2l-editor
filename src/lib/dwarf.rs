@@ -339,8 +339,15 @@ impl TypeResolver {
                         visiting,
                     ) {
                         if elem_type.real_offset != offset && elem_type.flat.size > 0 {
+                            let elem_size = elem_type.flat.size;
                             resolved.flat.encoding = elem_type.flat.encoding;
                             resolved.flat.pointer_target = Some(Box::new(elem_type.flat));
+                            if resolved.flat.size == 0 && !resolved.flat.array_dims.is_empty() {
+                                let total: usize = resolved.flat.array_dims.iter().product();
+                                if total > 0 {
+                                    resolved.flat.size = elem_size * total;
+                                }
+                            }
                         }
                     }
                 }
