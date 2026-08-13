@@ -430,6 +430,8 @@ pub struct DwarfParser {
     struct_map: HashMap<String, u64>,
     variable_types: HashMap<String, u64>,
     global_variables: Vec<DwarfVariable>,
+    // 声明 DIE 的 (name, type_offset)，按全局偏移索引，供 DW_AT_specification 解析
+    variable_declarations: HashMap<u64, (String, u64)>,
     array_elem_offsets: HashMap<u64, u64>,
     type_refs: HashMap<u64, u64>,
     stats: DwarfStats,
@@ -522,6 +524,7 @@ impl DwarfParser {
             struct_map: HashMap::new(),
             variable_types: HashMap::new(),
             global_variables: Vec::new(),
+            variable_declarations: HashMap::new(),
             array_elem_offsets: HashMap::new(),
             type_refs: HashMap::new(),
             stats: DwarfStats::default(),
@@ -1076,21 +1079,60 @@ impl DwarfParser {
     ) {
         self.stats.variables += 1;
 
-        if let Some(name) = self.get_name(entry) {
-            let type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
+        let global_offset = (unit_offset + entry.offset().0) as u64;
+        let own_type_offset = Self::get_type_offset_with_unit(entry, unit_offset);
 
-            if let Some(address) = self.parse_location(entry) {
-                self.global_variables.push(DwarfVariable {
-                    name: name.clone(),
-                    address,
-                    type_offset,
-                });
-            }
+        // 优先从 DW_AT_name 获取名称
+        let own_name = self.get_name(entry);
 
-            if type_offset > 0 {
-                self.variable_types.insert(name, type_offset);
-            }
+        // 记录声明信息（供后续 DW_AT_specification 引用解析）
+        if let Some(ref n) = own_name {
+            self.variable_declarations
+                .insert(global_offset, (n.clone(), own_type_offset));
         }
+
+        // 确定最终使用的 name 和 type_offset
+        let (name, type_offset) = if let Some(n) = own_name {
+            (n, own_type_offset)
+        } else {
+            // 无直接 DW_AT_name，尝试从 DW_AT_specification 解析
+            match self.resolve_specification(entry, unit_offset) {
+                Some(spec) => spec,
+                None => return,
+            }
+        };
+
+        if let Some(address) = self.parse_location(entry) {
+            self.global_variables.push(DwarfVariable {
+                name: name.clone(),
+                address,
+                type_offset,
+            });
+        }
+
+        if type_offset > 0 {
+            self.variable_types.insert(name, type_offset);
+        }
+    }
+
+    /// 从 DW_AT_specification 引用的声明 DIE 中解析 (name, type_offset)
+    fn resolve_specification(
+        &self,
+        entry: &gimli::DebuggingInformationEntry<DwarfReader>,
+        unit_offset: usize,
+    ) -> Option<(String, u64)> {
+        let attr = entry
+            .attr(gimli::constants::DW_AT_specification)
+            .ok()
+            .flatten()?;
+
+        let spec_offset = match attr.value() {
+            gimli::AttributeValue::UnitRef(r) => (unit_offset + r.0) as u64,
+            gimli::AttributeValue::DebugInfoRef(r) => r.0 as u64,
+            _ => return None,
+        };
+
+        self.variable_declarations.get(&spec_offset).cloned()
     }
 
     fn parse_location(&self, entry: &gimli::DebuggingInformationEntry<DwarfReader>) -> Option<u64> {
