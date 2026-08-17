@@ -266,6 +266,13 @@ pub fn generate_package(
     output_path: Option<String>,
     state: State<Mutex<AppState>>,
 ) -> Result<PackageMetaInfo, String> {
+    // 先释放旧数据包的文件句柄，否则 Windows 上无法删除旧包文件
+    {
+        let mut state = state.lock().map_err(|e| e.to_string())?;
+        state.data_package = None;
+        state.store = None;
+    }
+
     let elf = PathBuf::from(&elf_path);
     let parser = ElfParser::parse_deep(&elf).map_err(|e| format!("解析失败: {}", e))?;
     let store = parser.a2l_entries().ok_or("未找到 A2L 条目")?.clone();
