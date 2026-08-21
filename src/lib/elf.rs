@@ -468,6 +468,12 @@ impl ElfParser {
         let bitfield_groups = Self::compute_bitfield_groups(&type_info.members);
 
         for member in &type_info.members {
+            // 无名位域是 C 的匿名 padding（如 unsigned char :4），无可观测语义，不生成条目；
+            // 无名复合成员仍需展开（匿名 union/struct 依赖 "_" 占位名继承父路径，见 ISSUES.md）
+            if member.is_bitfield() && member.name == "_" {
+                continue;
+            }
+
             let full_name = if member.name == "_" {
                 prefix.to_string()
             } else {
@@ -495,8 +501,6 @@ impl ElfParser {
         };
 
         let container_addr = base_addr + bg.container_offset as u64;
-        let container_a2l_type =
-            infer_a2l_type_from_encoding(bg.container_size, Default::default());
         let raw_bo = member.bit_offset.unwrap_or(0);
         let raw_bs = member.bit_size.unwrap_or(0);
         let storage_bits = if member.type_size > 0 {
@@ -509,23 +513,57 @@ impl ElfParser {
         } else {
             member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs)
         };
-        // 条目地址与 SYMBOL_LINK 均指向容器字节，BIT_MASK 需要容器内相对位偏移，
-        // 直接用结构体内绝对偏移会移位越界或落到容器之外
-        let bit_offset = absolute_lsb.saturating_sub(bg.container_offset * 8);
+        // 容器内相对位偏移，条目地址/SYMBOL_LINK/BIT_MASK 基于同一窗口起点
+        let rel_lsb = absolute_lsb.saturating_sub(bg.container_offset * 8);
         let bit_size = raw_bs;
-        let symbol_link_offset = container_addr.saturating_sub(ctx.root_addr);
+
+        // 读取窗口：默认沿用容器（宽度向上取整到 1/2/4/8，A2L datatype 与 u64 掩码
+        // 最大 8 字节）；仅当位域落不进 8 字节窗口（如 12 字节位域组第 8 字节之后
+        // 的字段）才重锚定到能覆盖位域的最小对齐窗口，保证 BIT_MASK 始终有效
+        let (start_byte, width) = Self::bitfield_read_window(bg.container_size, rel_lsb, bit_size);
+        let entry_addr = container_addr + start_byte as u64;
+        let bit_offset = rel_lsb - start_byte * 8;
+        let a2l_type = infer_a2l_type_from_encoding(width, Default::default());
+        let symbol_link_offset = entry_addr.saturating_sub(ctx.root_addr);
 
         ctx.store.add(
             A2lEntry::new(
                 name.to_string(),
-                container_addr,
-                bg.container_size,
-                container_a2l_type.to_string(),
+                entry_addr,
+                width,
+                a2l_type.to_string(),
                 member.type_name.clone(),
             )
             .with_bitfield(bit_offset, bit_size)
             .with_symbol_link(ctx.root_symbol.to_string(), symbol_link_offset),
         );
+    }
+
+    /// 位域读取窗口，返回 (窗口起点字节, 窗口宽度字节)。
+    /// 容器宽度先向上取整到标准读宽；位域超出该窗口时按 1→2→4→8
+    /// 选取能覆盖 (rel_lsb % span + bit_size) 的最小对齐窗口。
+    fn bitfield_read_window(
+        container_size: usize,
+        rel_lsb: usize,
+        bit_size: usize,
+    ) -> (usize, usize) {
+        let container_width = match container_size {
+            0..=1 => 1,
+            2 => 2,
+            3..=4 => 4,
+            _ => 8,
+        };
+        if rel_lsb + bit_size <= container_width * 8 {
+            return (0, container_width);
+        }
+        for width in [1usize, 2, 4, 8] {
+            let span = width * 8;
+            if rel_lsb % span + bit_size <= span {
+                return (rel_lsb / span * width, width);
+            }
+        }
+        // 单个位域超过 64 位（C 位域极少见），退回 8 字节对齐窗口，掩码只覆盖窗口内部分
+        (rel_lsb / 64 * 8, 8)
     }
 
     fn expand_member(
@@ -878,6 +916,80 @@ mod tests {
         let e3 = store.get_by_name("Srv._1_.SecurityAccessNeeded").unwrap();
         assert_eq!(e3.address, 0x1000 + 14 + 13);
         assert_eq!(e3.bit_offset, Some(4));
+    }
+
+    #[test]
+    fn skips_unnamed_padding_bitfield() {
+        // C 的匿名 padding 位域（unsigned char :4）不生成条目，也不会顶用父路径名
+        let low = StructMember::new("Low".to_string(), 1, "unsigned char".to_string(), 1)
+            .with_bitfield(8, 4, true);
+        let pad = StructMember::new("_".to_string(), 1, "unsigned char".to_string(), 1)
+            .with_bitfield(12, 4, true);
+        let elem = TypeInfo::struct_type("Packed".to_string(), 2, vec![low, pad], 0x40);
+
+        let store = expand_single("P", 0x100, elem);
+
+        let e = store.get_by_name("P.Low").unwrap();
+        assert_eq!(e.address, 0x101);
+        assert_eq!(e.bit_offset, Some(0));
+        assert!(store.get_by_name("P").is_none(), "无名 padding 位域不应生成条目");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn widens_subword_container_to_8byte_window() {
+        // 7 字节位域组（NvM 场景）：读宽向上取整为 8 字节 A_UINT64，
+        // 地址保持容器基址，掩码位偏移不变
+        let f0 = StructMember::new("B0".to_string(), 0, "unsigned char".to_string(), 1)
+            .with_bitfield(0, 8, true);
+        let f1 = StructMember::new("B1".to_string(), 1, "unsigned char".to_string(), 1)
+            .with_bitfield(8, 8, true);
+        let last = StructMember::new("Last".to_string(), 6, "unsigned char".to_string(), 1)
+            .with_bitfield(48, 1, true);
+        let elem = TypeInfo::struct_type("Wide".to_string(), 7, vec![f0, f1, last], 0x40);
+
+        let store = expand_single("W", 0x200, elem);
+
+        for name in ["W.B0", "W.B1", "W.Last"] {
+            let e = store.get_by_name(name).unwrap();
+            assert_eq!(e.address, 0x200);
+            assert_eq!(e.size, 8);
+            assert_eq!(e.a2l_type, "A_UINT64");
+        }
+        assert_eq!(store.get_by_name("W.B0").unwrap().bit_offset, Some(0));
+        assert_eq!(store.get_by_name("W.B1").unwrap().bit_offset, Some(8));
+        assert_eq!(store.get_by_name("W.Last").unwrap().bit_offset, Some(48));
+    }
+
+    #[test]
+    fn reanchors_bitfield_beyond_8byte_container() {
+        // 12 字节位域组（FunDegrad 场景）：前 8 字节内字段沿用容器窗口 A_UINT64，
+        // 超出部分重锚定到字段自身字节，BIT_MASK 回到字节内
+        let mk = |name: String, abs: usize| {
+            StructMember::new(name, abs / 8, "unsigned char".to_string(), 1)
+                .with_bitfield(abs, 4, true)
+        };
+        let members: Vec<_> = (0..24).map(|i| mk(format!("F{i:02}"), i * 4)).collect();
+        let elem = TypeInfo::struct_type("Pack".to_string(), 12, members, 0x40);
+
+        let store = expand_single("T", 0x300, elem);
+
+        let f15 = store.get_by_name("T.F15").unwrap();
+        assert_eq!(f15.address, 0x300);
+        assert_eq!(f15.size, 8);
+        assert_eq!(f15.a2l_type, "A_UINT64");
+        assert_eq!(f15.bit_offset, Some(60));
+
+        let f16 = store.get_by_name("T.F16").unwrap();
+        assert_eq!(f16.address, 0x300 + 8);
+        assert_eq!(f16.size, 1);
+        assert_eq!(f16.a2l_type, "UBYTE");
+        assert_eq!(f16.bit_offset, Some(0));
+
+        let f22 = store.get_by_name("T.F22").unwrap();
+        assert_eq!(f22.address, 0x300 + 11);
+        assert_eq!(f22.bit_offset, Some(0));
+        assert_eq!(f22.symbol_link_offset, Some(11));
     }
 
     #[test]

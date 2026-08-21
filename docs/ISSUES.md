@@ -521,3 +521,49 @@ DWARF4 引入的 `DW_AT_data_bit_offset` 已经是绝对 LSB 偏移，不需要�
 - `src/lib/dwarf.rs` — `get_bitfield_info_static`（第 882-913 行）- DWARF 位域信息提取
 
 ---
+
+## [FIXED] 超 8 字节位域组 BIT_MASK 无效，及无名 padding 位域生成假条目
+
+**发现日期**: 2026-08-21
+**修复日期**: 2026-08-21
+**严重程度**: 高
+
+### 问题描述
+
+两个叠加问题（复现变量 `App_FunDegrad_Configs._6_.FunInhibitTable.*`，test.elf）：
+
+1. 匿名结构体内 24 个 4 位字段构成 12 字节位域组，`compute_bitfield_groups`
+   将整组当作一个"容器"：datatype 推断 12 字节失败回退 UBYTE（读宽 1 字节），
+   掩码却按容器内绝对位偏移计算。后果：
+   - `Fun08~Fun15` 掩码落在第 32~60 位，超出 UBYTE 读宽，INCA 取不到值
+   - `Fun16~Fun22` 位偏移 ≥ 64，u64 移位回绕，掩码与 `Fun00~Fun06` 撞车
+2. C 源码末尾的匿名 padding 位域（`unsigned char :4;`，DWARF 无 `DW_AT_name`）
+   被起名 `"_"` 后继承父路径，生成顶着 `...FunInhibitTable` 名字的假条目，
+   掩码同样是回绕错值（`App_FunDegrad_Cfg.h:27`，426 个 `...B` 条目同源）
+
+### 根本原因
+
+A2L 的 BIT_MASK 为 u64、datatype 最大 8 字节，"容器基址 + 容器内绝对位偏移"
+的表示法只在容器 ≤ 8 字节时成立；NvM 的 7 字节容器也因 `infer` 对非标准尺寸
+回退 UBYTE 而违反"datatype 由容器宽度推断"的原则。
+
+### 修复方案（0.3.9）
+
+`src/lib/elf.rs` `expand_bitfield` 引入读取窗口（`bitfield_read_window`）：
+
+1. 容器宽度向上取整到 1/2/4/8 字节（≤4B 容器输出与原格式完全一致，
+   5~8B 容器 datatype 修正为 A_UINT64，地址/掩码不变）
+2. 位域超出 8 字节窗口时重锚定到能覆盖位域的最小对齐窗口，
+   地址指向窗口起点，BIT_MASK 回到窗口内
+3. 无名位域（padding）不再生成条目；无名复合成员仍正常展开
+   （匿名 union/struct 依赖 `"_"` 占位名，见 2026-03-21 条目）
+
+### 验证结果
+
+- test.elf 全量导出 diff：252257 条中 244006 条完全一致；
+  变化 8251 条全部归类为"datatype 拓宽 5770 / 重锚定 2481"，移除 748 条
+  全部为无名 padding 位域（322 FunInhibitTable + 426 …B），新增 0
+- test_cases.md 用例 1~6 按原标准零变化通过；用例 7 预期更新 datatype
+- SF40_TC377_PRJ.elf 全量导出 0 警告 0 panic；EolTest_DcmService 位域（1B 容器）不变
+
+---
