@@ -20,6 +20,17 @@ pub struct PackageMeta {
     pub entry_count: usize,
     pub created_at: i64,
     pub parser_version: String,
+    pub elf_mtime: i64,
+}
+
+fn elf_mtime(elf_path: &Path) -> Result<i64> {
+    let mtime = std::fs::metadata(elf_path)?
+        .modified()
+        .context("无法读取 ELF 修改时间")?;
+    Ok(mtime
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .context("ELF 修改时间早于 Unix 纪元")?
+        .as_secs() as i64)
 }
 
 impl DataPackage {
@@ -36,7 +47,15 @@ impl DataPackage {
 
     pub fn open(elf_path: &Path) -> Result<Self> {
         let package_path = Self::get_package_path(elf_path);
-        Self::open_path(&package_path)
+        let package = Self::open_path(&package_path)?;
+
+        // 校验 ELF 修改时间与数据包记录是否一致
+        let meta = package.get_meta()?;
+        if elf_mtime(elf_path)? != meta.elf_mtime {
+            bail!("ELF 已修改，与数据包不匹配，请重新生成缓存");
+        }
+
+        Ok(package)
     }
 
     pub fn open_path(path: &Path) -> Result<Self> {
@@ -50,7 +69,8 @@ impl DataPackage {
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
                 created_at INTEGER,
-                parser_version TEXT NOT NULL
+                parser_version TEXT NOT NULL,
+                elf_mtime INTEGER
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -102,7 +122,8 @@ impl DataPackage {
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
                 created_at INTEGER,
-                parser_version TEXT NOT NULL
+                parser_version TEXT NOT NULL,
+                elf_mtime INTEGER
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -126,12 +147,13 @@ impl DataPackage {
 
         let created_at = chrono::Utc::now().timestamp();
         db.execute(
-            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version) VALUES (1, ?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version, elf_mtime) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
             params![
                 file_name,
                 elf_path.to_string_lossy().to_string(),
                 created_at,
                 Self::PARSER_VERSION,
+                elf_mtime(elf_path)?,
             ],
         )?;
 
@@ -162,7 +184,8 @@ impl DataPackage {
                 elf_path TEXT,
                 entry_count INTEGER DEFAULT 0,
                 created_at INTEGER,
-                parser_version TEXT NOT NULL
+                parser_version TEXT NOT NULL,
+                elf_mtime INTEGER
             );
             
             CREATE TABLE IF NOT EXISTS a2l_entries (
@@ -186,12 +209,13 @@ impl DataPackage {
 
         let created_at = chrono::Utc::now().timestamp();
         db.execute(
-            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version) VALUES (1, ?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO meta (id, file_name, elf_path, created_at, parser_version, elf_mtime) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
             params![
                 file_name,
                 elf_path.to_string_lossy().to_string(),
                 created_at,
                 Self::PARSER_VERSION,
+                elf_mtime(elf_path)?,
             ],
         )?;
 
@@ -268,7 +292,7 @@ impl DataPackage {
         let meta = self
             .db
             .query_row(
-                "SELECT file_name, elf_path, entry_count, created_at, parser_version FROM meta WHERE id = 1",
+                "SELECT file_name, elf_path, entry_count, created_at, parser_version, elf_mtime FROM meta WHERE id = 1",
                 [],
                 |row| {
                     Ok(PackageMeta {
@@ -277,6 +301,7 @@ impl DataPackage {
                         entry_count: row.get::<_, i64>(2)? as usize,
                         created_at: row.get(3)?,
                         parser_version: row.get(4)?,
+                        elf_mtime: row.get(5)?,
                     })
                 },
             )
@@ -419,13 +444,18 @@ mod tests {
         std::env::temp_dir().join(unique)
     }
 
+    fn temp_elf(name: &str) -> PathBuf {
+        let elf_path = temp_path(name).with_extension("elf");
+        fs::write(&elf_path, b"elf").unwrap();
+        elf_path
+    }
+
     #[test]
     fn new_package_records_parser_version() {
-        let db_path = temp_path("package-version.a2ldata");
-        let elf_path = PathBuf::from("sample.elf");
+        let elf_path = temp_elf("package-version");
+        let db_path = elf_path.with_extension("elf.a2ldata");
 
-        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
-        let meta = package.get_meta().unwrap();
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();        let meta = package.get_meta().unwrap();
 
         assert_eq!(meta.parser_version, env!("CARGO_PKG_VERSION"));
         drop(package);
@@ -439,7 +469,8 @@ mod tests {
 
     #[test]
     fn create_at_replaces_old_schema_package() {
-        let db_path = temp_path("replace-old-package.a2ldata");
+        let elf_path = temp_elf("replace-old-package");
+        let db_path = elf_path.with_extension("elf.a2ldata");
         let db = Connection::open(&db_path).unwrap();
         db.execute_batch(
             r#"
@@ -457,7 +488,7 @@ mod tests {
         .unwrap();
         drop(db);
 
-        let package = DataPackage::create_at(&db_path, &PathBuf::from("new.elf")).unwrap();
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
         assert_eq!(
             package.get_meta().unwrap().parser_version,
             env!("CARGO_PKG_VERSION")
@@ -468,9 +499,9 @@ mod tests {
 
     #[test]
     fn create_lock_is_removed_after_save() {
-        let db_path = temp_path("locked-package.a2ldata");
+        let elf_path = temp_elf("locked-package");
+        let db_path = elf_path.with_extension("elf.a2ldata");
         let lock_path = DataPackage::lock_path_for(&db_path);
-        let elf_path = PathBuf::from("sample.elf");
 
         let mut package = DataPackage::create_at(&db_path, &elf_path).unwrap();
         assert!(lock_path.exists());
@@ -480,6 +511,38 @@ mod tests {
 
         drop(package);
         let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn open_rejects_modified_elf() {
+        let dir = temp_path("mtime-check");
+        fs::create_dir_all(&dir).unwrap();
+        let elf_path = dir.join("sample.elf");
+        fs::write(&elf_path, b"elf").unwrap();
+        let db_path = dir.join("sample.elf.a2ldata");
+
+        let mut package = DataPackage::create(&elf_path).unwrap();
+        let _ = package.save_entries(&A2lEntryStore::new()).unwrap();
+        drop(package);
+
+        // ELF 未修改时可正常打开
+        assert!(DataPackage::open(&elf_path).is_ok());
+
+        // 模拟 ELF 重新编译：修改内容并更新时间戳
+        let new_mtime = SystemTime::now() + Duration::from_secs(10);
+        fs::write(&elf_path, b"elf-new").unwrap();
+        let f = fs::File::options().write(true).open(&elf_path).unwrap();
+        f.set_modified(new_mtime).unwrap();
+        drop(f);
+
+        let err = match DataPackage::open(&elf_path) {
+            Ok(_) => panic!("ELF 修改后不应打开数据包"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("请重新生成缓存"));
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_file(&elf_path);
     }
 
     #[test]
