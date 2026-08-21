@@ -1,6 +1,6 @@
 [package]
 name = "a2l-editor-tauri"
-version = "0.3.7"
+version = "0.3.9"
 edition = "2021"
 description = "A2L Editor Tauri Backend"
 authors = ["A2L Editor Team"]
