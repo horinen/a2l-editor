@@ -321,12 +321,12 @@ impl A2lGenerator {
     ) -> String {
         let a2l_type = entry.a2l_type.as_str();
 
-        let max_val = if entry.is_bitfield() {
+        let (min_val, max_val) = if entry.is_bitfield() {
             let size = entry.bit_size.unwrap();
-            format!("{}", Self::get_bitfield_max(size))
+            ("0".to_string(), format!("{}", Self::get_bitfield_max(size)))
         } else {
-            let (_, max) = Self::get_min_max(a2l_type);
-            max.to_string()
+            let (min, max) = Self::get_min_max(a2l_type);
+            (min.to_string(), max.to_string())
         };
 
         let compu = compu_method.unwrap_or("NO_COMPU_METHOD");
@@ -337,8 +337,8 @@ impl A2lGenerator {
             entry.full_name
         ));
         output.push_str(&format!(
-            "      VALUE 0x{:08X} {} 0 {} 0 {}\n",
-            entry.address, record_layout, compu, max_val
+            "      VALUE 0x{:08X} {} 0 {} {} {}\n",
+            entry.address, record_layout, compu, min_val, max_val
         ));
 
         if entry.is_bitfield() {
@@ -349,7 +349,10 @@ impl A2lGenerator {
             output.push_str(&format!("      BIT_MASK 0x{:X}\n", mask));
         }
 
-        output.push_str(&format!("      EXTENDED_LIMITS 0 {}\n", max_val));
+        output.push_str(&format!(
+            "      EXTENDED_LIMITS {} {}\n",
+            min_val, max_val
+        ));
         if entry.is_bitfield() && entry.symbol_link_name.is_some() {
             let sym_name = entry.symbol_link_name.as_ref().unwrap();
             let sym_offset = entry.symbol_link_offset.unwrap_or(0);
@@ -542,11 +545,25 @@ impl A2lGenerator {
             Endianness::Little => bit_offset,
             Endianness::Big => container_size_bits.saturating_sub(bit_offset + bit_size),
         };
-        ((1u64 << bit_size) - 1) << shift
+        let field_mask = Self::get_bitfield_max(bit_size);
+        match field_mask.checked_shl(shift as u32) {
+            Some(mask) => mask,
+            None => {
+                eprintln!(
+                    "警告: 位域超出 64 位 BIT_MASK 表示范围: offset={} size={} container={}",
+                    bit_offset, bit_size, container_size_bits
+                );
+                field_mask.wrapping_shl(shift as u32)
+            }
+        }
     }
 
     fn get_bitfield_max(bit_size: usize) -> u64 {
-        (1u64 << bit_size) - 1
+        if bit_size >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << bit_size) - 1
+        }
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
@@ -1392,8 +1409,18 @@ impl A2lParser {
                     if value_pos + 1 < parts.len() {
                         address = Some(parts[value_pos + 1].to_string());
                     }
-                    if value_pos + 4 < parts.len() {
-                        compu_method = Some(parts[value_pos + 3].to_string());
+                    // VALUE 行字段: Address Deposit MaxDiff Conversion LowerLimit UpperLimit
+                    // 部分文件省略 MaxDiff，此时 +3 位置就是 Conversion，按是否为数字区分两种布局
+                    let conv_pos = if value_pos + 4 < parts.len()
+                        && parts[value_pos + 3].parse::<f64>().is_ok()
+                        && parts[value_pos + 4].parse::<f64>().is_err()
+                    {
+                        value_pos + 4
+                    } else {
+                        value_pos + 3
+                    };
+                    if conv_pos < parts.len() {
+                        compu_method = Some(parts[conv_pos].to_string());
                     }
                 }
             }
@@ -1971,5 +1998,55 @@ mod tests {
         assert_eq!(result.modified, 1);
         assert!(updated.contains("VALUE 0x20000026 UWord 0 NO_COMPU_METHOD 0 65535"));
         assert!(updated.contains("LINK_MAP \"CalValue\" 0x20000026 0 0 0 1 0x8F 0"));
+    }
+
+    #[test]
+    fn characteristic_limits_use_type_range() {
+        let entry = A2lEntry::new(
+            "IMU_ay_can".to_string(),
+            0x70027538,
+            4,
+            "FLOAT32_IEEE".to_string(),
+            "float".to_string(),
+        );
+        let block = A2lGenerator::generate_characteristic_block_with_record_layout(
+            &entry,
+            None,
+            Endianness::Little,
+            "ValFloat32IEEE",
+        );
+
+        // MaxDiff 保持字面量 0，下限取类型最小值而非写死 0
+        assert!(block
+            .contains("VALUE 0x70027538 ValFloat32IEEE 0 NO_COMPU_METHOD -3.4E38 3.4E38"));
+        assert!(block.contains("EXTENDED_LIMITS -3.4E38 3.4E38"));
+    }
+
+    #[test]
+    fn parses_compu_method_from_characteristic_value_line() {
+        // 同时覆盖规范布局（含 MaxDiff）与省略 MaxDiff 的布局
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin CHARACTERISTIC CalValue ""
+      VALUE 0x20000026 ValUByte 0 CM_CalValue 0 255
+      EXTENDED_LIMITS 0 255
+      SYMBOL_LINK "CalValue" 0
+    /end CHARACTERISTIC
+    /begin CHARACTERISTIC LegacyValue ""
+      VALUE 0x20000030 ValUByte CM_Legacy 0 255
+    /end CHARACTERISTIC
+  /end MODULE
+/end PROJECT
+"#;
+
+        let variables = A2lParser::parse_all_variables(content);
+
+        assert_eq!(variables.len(), 2);
+        assert_eq!(variables[0].name, "CalValue");
+        assert_eq!(variables[0].address.as_deref(), Some("0x20000026"));
+        assert_eq!(variables[0].compu_method.as_deref(), Some("CM_CalValue"));
+        assert_eq!(variables[1].name, "LegacyValue");
+        assert_eq!(variables[1].compu_method.as_deref(), Some("CM_Legacy"));
     }
 }
