@@ -27,6 +27,7 @@ Thumbs.db
 
 # Misc
 .sisyphus/
+.zcode/
 
 # AI Testing - 只提交测试计划和mock，忽略结果
 .ai-testing/results/
