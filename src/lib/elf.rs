@@ -504,11 +504,14 @@ impl ElfParser {
         } else {
             bg.container_size * 8
         };
-        let bit_offset = if member.bit_offset_is_absolute || raw_bo + raw_bs > storage_bits {
+        let absolute_lsb = if member.bit_offset_is_absolute || raw_bo + raw_bs > storage_bits {
             raw_bo
         } else {
             member.offset * 8 + storage_bits.saturating_sub(raw_bo + raw_bs)
         };
+        // 条目地址与 SYMBOL_LINK 均指向容器字节，BIT_MASK 需要容器内相对位偏移，
+        // 直接用结构体内绝对偏移会移位越界或落到容器之外
+        let bit_offset = absolute_lsb.saturating_sub(bg.container_offset * 8);
         let bit_size = raw_bs;
         let symbol_link_offset = container_addr.saturating_sub(ctx.root_addr);
 
@@ -840,6 +843,41 @@ mod tests {
         assert_eq!(store.entries[2].bit_offset, Some(14));
         assert_eq!(store.entries[3].full_name, "Fault._1_");
         assert_eq!(store.entries[3].address, 0x2002);
+    }
+
+    #[test]
+    fn normalizes_absolute_bitfield_offset_to_container() {
+        // 模拟 Dcm 配置表：13 字节普通成员后跟共享 1 字节容器的单 bit 标志位，
+        // 绝对 LSB 为结构体内偏移（104~108），BIT_MASK 需换算为容器内偏移（0~4）
+        let header =
+            StructMember::new("Header".to_string(), 0, "unsigned char[13]".to_string(), 13);
+        let flag = |name: &str, absolute_lsb: usize| {
+            StructMember::new(name.to_string(), 13, "unsigned char".to_string(), 1)
+                .with_bitfield(absolute_lsb, 1, true)
+        };
+        let members = vec![
+            header,
+            flag("SuppPosResponsAllowed", 104),
+            flag("AllowedInDefaultSession", 105),
+            flag("SecurityAccessNeeded", 108),
+        ];
+        let elem = TypeInfo::struct_type("DcmService".to_string(), 14, members, 0x40);
+        let array = TypeInfo::array_type("array[2]".to_string(), 28, elem, vec![2], 0x50);
+
+        let store = expand_single("Srv", 0x1000, array);
+
+        let e = store.get_by_name("Srv._0_.SecurityAccessNeeded").unwrap();
+        assert_eq!(e.address, 0x1000 + 13);
+        assert_eq!(e.size, 1);
+        assert_eq!(e.bit_offset, Some(108 - 13 * 8));
+        assert_eq!(e.symbol_link_offset, Some(13));
+
+        let e2 = store.get_by_name("Srv._0_.SuppPosResponsAllowed").unwrap();
+        assert_eq!(e2.bit_offset, Some(0));
+
+        let e3 = store.get_by_name("Srv._1_.SecurityAccessNeeded").unwrap();
+        assert_eq!(e3.address, 0x1000 + 14 + 13);
+        assert_eq!(e3.bit_offset, Some(4));
     }
 
     #[test]
