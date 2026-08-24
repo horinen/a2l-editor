@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { showGenerateDialog, elfPath, elfFileName, elfTotalCount, packagePath, statusMessage, isLoading, elfEntries } from '$lib/stores';
+  import { showGenerateDialog, generateDialogNotice, elfPath, elfFileName, elfTotalCount, packagePath, statusMessage, isLoading, elfEntries } from '$lib/stores';
   import { generatePackage, searchElfEntries } from '$lib/commands';
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { fly } from 'svelte/transition';
@@ -8,26 +8,27 @@
 
   async function handleGenerate() {
     if (!$elfPath) return;
-    
+
     isLoading.set(true);
     statusMessage.set('⏳ 正在生成数据包...');
-    
+
     try {
       const result = await generatePackage($elfPath, customPath || undefined);
       elfTotalCount.set(result.entry_count);
       packagePath.set(customPath || $elfPath + '.a2ldata');
-      
+
       // 加载变量
       const entries = await searchElfEntries('', 0, 10000);
       elfEntries.set(entries);
-      
+
       statusMessage.set(`✅ 数据包生成成功，已加载 ${result.entry_count} 个条目`);
     } catch (e) {
       statusMessage.set(`❌ 生成失败: ${e}`);
     }
-    
+
     isLoading.set(false);
     showGenerateDialog.set(false);
+    generateDialogNotice.set(null);
     customPath = null;
   }
 
@@ -43,6 +44,7 @@
 
   function close() {
     showGenerateDialog.set(false);
+    generateDialogNotice.set(null);
     customPath = null;
   }
 
@@ -64,6 +66,10 @@
       </div>
       
       <div class="content">
+        {#if $generateDialogNotice}
+          <p class="notice">⚠️ {$generateDialogNotice}</p>
+        {/if}
+
         <p>ELF 文件: <strong>{$elfFileName || '未选择'}</strong></p>
         
         <div class="path-info">
@@ -129,6 +135,16 @@
 
   .content {
     padding: 16px;
+  }
+
+  .notice {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    background: var(--bg-hover);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    word-break: break-all;
   }
 
   .path-info {

@@ -23,10 +23,23 @@ export interface A2lVariable {
   unit: string | null;
 }
 
-export interface LoadResult {
+export interface LoadOkResult {
   meta: PackageMeta;
   entry_count: number;
 }
+
+export interface LoadStaleResult {
+  /** 过期原因文案（版本不符 / ELF 已修改 / 旧 schema） */
+  reason: string;
+  /** 重新生成所需的原始 ELF 路径（可能推断失败为 null） */
+  elf_path: string | null;
+  /** ELF 文件当前是否存在 */
+  elf_exists: boolean;
+}
+
+export type LoadResult =
+  | ({ status: 'ok' } & LoadOkResult)
+  | ({ status: 'stale' } & LoadStaleResult);
 
 export interface PackageMeta {
   file_name: string;

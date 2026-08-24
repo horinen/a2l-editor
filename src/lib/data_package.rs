@@ -1,6 +1,6 @@
 use crate::types::{A2lEntry, A2lEntryStore};
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -23,6 +23,16 @@ pub struct PackageMeta {
     pub elf_mtime: i64,
 }
 
+/// 过期数据包探测结果：携带重新生成缓存所需的恢复信息
+pub struct StaleProbe {
+    /// 数据包内记录的解析器版本；旧 schema 无版本列时为 None
+    pub parser_version: Option<String>,
+    /// meta 表中记录的原始 ELF 路径；读不到时为 None（由调用方推断）
+    pub elf_path: Option<String>,
+    /// ELF 当前 mtime 与包内记录不一致（仅 elf_hint 提供时可能为 true）
+    pub elf_mtime_mismatch: bool,
+}
+
 fn elf_mtime(elf_path: &Path) -> Result<i64> {
     let mtime = std::fs::metadata(elf_path)?
         .modified()
@@ -43,6 +53,73 @@ impl DataPackage {
     pub fn exists(elf_path: &Path) -> bool {
         let package_path = Self::get_package_path(elf_path);
         package_path.exists()
+    }
+
+    pub fn parser_version() -> &'static str {
+        Self::PARSER_VERSION
+    }
+
+    /// 只读探测数据包是否为"过期缓存"（版本不符 / ELF 已修改 / 旧 schema）。
+    ///
+    /// 与 `open_path` 不同：以只读方式打开，不建表、不创建文件，
+    /// 因此对垃圾文件或陌生 SQLite 库无副作用。非过期情况返回 None。
+    pub fn probe_stale(package_path: &Path, elf_hint: Option<&Path>) -> Option<StaleProbe> {
+        let db = Connection::open_with_flags(package_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+
+        // meta 表不存在（非数据包文件或空数据库）则不属于"过期"问题
+        let has_meta: bool = db
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_meta {
+            return None;
+        }
+
+        // 新 schema：读取完整 meta 行
+        let full_row: Option<(Option<String>, String, Option<i64>)> = db
+            .query_row(
+                "SELECT elf_path, parser_version, elf_mtime FROM meta WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok();
+
+        if let Some((elf_path, parser_version, recorded_mtime)) = full_row {
+            if parser_version != Self::PARSER_VERSION {
+                return Some(StaleProbe {
+                    parser_version: Some(parser_version),
+                    elf_path,
+                    elf_mtime_mismatch: false,
+                });
+            }
+            // 版本一致，且包内记录了 mtime 时，检查 ELF 是否已修改
+            if let (Some(elf), Some(recorded)) = (elf_hint, recorded_mtime) {
+                if let Ok(current) = elf_mtime(elf) {
+                    if current != recorded {
+                        return Some(StaleProbe {
+                            parser_version: Some(parser_version),
+                            elf_path,
+                            elf_mtime_mismatch: true,
+                        });
+                    }
+                }
+            }
+            return None;
+        }
+
+        // meta 表存在但完整行读取失败：旧 schema 数据包，同样视为过期
+        let elf_path: Option<String> = db
+            .query_row("SELECT elf_path FROM meta WHERE id = 1", [], |row| row.get(0))
+            .ok()
+            .flatten();
+        Some(StaleProbe {
+            parser_version: None,
+            elf_path,
+            elf_mtime_mismatch: false,
+        })
     }
 
     pub fn open(elf_path: &Path) -> Result<Self> {
@@ -570,6 +647,110 @@ mod tests {
             Err(err) => err.to_string(),
         };
         assert!(err.contains("数据包版本过旧"));
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn probe_stale_detects_version_mismatch() {
+        let elf_path = temp_elf("probe-version");
+        let db_path = elf_path.with_extension("elf.a2ldata");
+
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
+        drop(package);
+        // 篡改为旧版本号，模拟升级后打开旧缓存
+        let db = Connection::open(&db_path).unwrap();
+        db.execute("UPDATE meta SET parser_version = '0.0.1' WHERE id = 1", [])
+            .unwrap();
+        drop(db);
+
+        let probe = DataPackage::probe_stale(&db_path, Some(&elf_path)).unwrap();
+        assert_eq!(probe.parser_version.as_deref(), Some("0.0.1"));
+        assert!(!probe.elf_mtime_mismatch);
+        assert_eq!(
+            probe.elf_path.as_deref(),
+            Some(elf_path.to_string_lossy().as_ref())
+        );
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(elf_path);
+    }
+
+    #[test]
+    fn probe_stale_returns_none_for_fresh_package() {
+        let elf_path = temp_elf("probe-fresh");
+        let db_path = elf_path.with_extension("elf.a2ldata");
+
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
+        drop(package);
+
+        assert!(DataPackage::probe_stale(&db_path, Some(&elf_path)).is_none());
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(elf_path);
+    }
+
+    #[test]
+    fn probe_stale_detects_mtime_mismatch() {
+        let elf_path = temp_elf("probe-mtime");
+        let db_path = elf_path.with_extension("elf.a2ldata");
+
+        let package = DataPackage::create_at(&db_path, &elf_path).unwrap();
+        drop(package);
+        // 篡改记录的 mtime，模拟 ELF 重新编译
+        let db = Connection::open(&db_path).unwrap();
+        db.execute(
+            "UPDATE meta SET elf_mtime = elf_mtime - 10 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let probe = DataPackage::probe_stale(&db_path, Some(&elf_path)).unwrap();
+        assert!(probe.elf_mtime_mismatch);
+        assert_eq!(probe.parser_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(elf_path);
+    }
+
+    #[test]
+    fn probe_stale_ignores_foreign_files() {
+        // 垃圾字节文件：不是过期问题
+        let garbage = temp_path("probe-garbage.a2ldata");
+        fs::write(&garbage, b"not a sqlite file").unwrap();
+        assert!(DataPackage::probe_stale(&garbage, None).is_none());
+        let _ = fs::remove_file(garbage);
+
+        // 不存在的路径：不创建新文件
+        let missing = temp_path("probe-missing.a2ldata");
+        assert!(DataPackage::probe_stale(&missing, None).is_none());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn probe_stale_detects_old_schema_package() {
+        let db_path = temp_path("probe-old-schema.a2ldata");
+        let db = Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            r#"
+            CREATE TABLE meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                file_name TEXT,
+                elf_path TEXT,
+                entry_count INTEGER DEFAULT 0,
+                created_at INTEGER
+            );
+            INSERT INTO meta (id, file_name, elf_path, entry_count, created_at)
+            VALUES (1, "sample.elf", "sample.elf", 0, 0);
+            "#,
+        )
+        .unwrap();
+        drop(db);
+
+        let probe = DataPackage::probe_stale(&db_path, None).unwrap();
+        assert!(probe.parser_version.is_none());
+        assert_eq!(probe.elf_path.as_deref(), Some("sample.elf"));
+
         let _ = fs::remove_file(db_path);
     }
 }

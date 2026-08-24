@@ -98,6 +98,8 @@ export const loadProgress = writable<number>(0);
 // 对话框状态
 export const showExportDialog = writable<boolean>(false);
 export const showGenerateDialog = writable<boolean>(false);
+// 生成对话框顶部的原因提示（缓存过期时展示，如"数据包由解析器版本 X 生成…"）
+export const generateDialogNotice = writable<string | null>(null);
 export const showAboutDialog = writable<boolean>(false);
 export const showHelpDialog = writable<boolean>(false);
 export const showCompuMethodPanel = writable<boolean>(false);

@@ -1,7 +1,7 @@
 use a2l_editor::{
     A2lEntry, A2lEntryInfo, A2lEntryStore, A2lGenerator, A2lParser, A2lVariable, CompuMethod,
     CompuMethodType, DataPackage, ElfParser, Endianness, ExportKind, PackageMeta, PreviewResult,
-    SaveResult, TabIntpPair, TabVerbPair, VariableChanges, VariableEdit,
+    SaveResult, StaleProbe, TabIntpPair, TabVerbPair, VariableChanges, VariableEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -101,9 +101,57 @@ pub struct AppState {
 }
 
 #[derive(Serialize)]
-pub struct LoadResult {
-    pub meta: PackageMetaInfo,
-    pub entry_count: usize,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LoadResult {
+    Ok {
+        meta: PackageMetaInfo,
+        entry_count: usize,
+    },
+    /// 缓存过期（版本不符 / ELF 已修改 / 旧 schema），携带重新生成所需信息
+    Stale {
+        reason: String,
+        elf_path: Option<String>,
+        elf_exists: bool,
+    },
+}
+
+/// 由探测结果构建返回给前端的过期信息
+fn stale_load_result(
+    package_path: &Path,
+    stale: &StaleProbe,
+    elf_hint: Option<&Path>,
+) -> LoadResult {
+    let elf_path = stale
+        .elf_path
+        .clone()
+        .or_else(|| elf_hint.map(|p| p.to_string_lossy().to_string()))
+        .or_else(|| {
+            // 旧包 meta 中无 ELF 路径时，从包文件名去掉 .a2ldata 后缀推断
+            package_path
+                .to_string_lossy()
+                .strip_suffix(".a2ldata")
+                .map(|s| s.to_string())
+        });
+    let elf_exists = elf_path
+        .as_deref()
+        .map(|p| Path::new(p).is_file())
+        .unwrap_or(false);
+
+    let reason = match (&stale.parser_version, stale.elf_mtime_mismatch) {
+        (Some(_), true) => "ELF 已修改，与数据包不匹配，请重新生成缓存".to_string(),
+        (Some(version), false) => format!(
+            "数据包由解析器版本 {} 生成，当前版本为 {}，请重新生成",
+            version,
+            DataPackage::parser_version()
+        ),
+        (None, _) => "数据包版本过旧（无法读取版本信息），请重新生成".to_string(),
+    };
+
+    LoadResult::Stale {
+        reason,
+        elf_path,
+        elf_exists,
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -216,7 +264,17 @@ fn load_from_package_internal(
     elf_path: &PathBuf,
     state: &mut AppState,
 ) -> Result<LoadResult, String> {
-    let pkg = DataPackage::open(elf_path).map_err(|e| format!("无法打开数据包: {}", e))?;
+    let pkg = match DataPackage::open(elf_path) {
+        Ok(pkg) => pkg,
+        Err(e) => {
+            // 打开失败时探测是否为"缓存过期"，是则返回恢复信息引导前端重新生成
+            let package_path = DataPackage::get_package_path(elf_path);
+            if let Some(stale) = DataPackage::probe_stale(&package_path, Some(elf_path)) {
+                return Ok(stale_load_result(&package_path, &stale, Some(elf_path)));
+            }
+            return Err(format!("无法打开数据包: {}", e));
+        }
+    };
     let meta = pkg
         .get_meta()
         .map_err(|e| format!("无法读取元信息: {}", e))?;
@@ -228,7 +286,7 @@ fn load_from_package_internal(
     state.store = Some(store);
     state.data_package = Some(pkg);
 
-    Ok(LoadResult {
+    Ok(LoadResult::Ok {
         meta: PackageMetaInfo::from(meta),
         entry_count,
     })
@@ -239,8 +297,16 @@ pub fn load_package(path: String, state: State<Mutex<AppState>>) -> Result<LoadR
     let package_path = PathBuf::from(&path);
     let mut state = state.lock().map_err(|e| e.to_string())?;
 
-    let pkg =
-        DataPackage::open_path(&package_path).map_err(|e| format!("无法打开数据包: {}", e))?;
+    let pkg = match DataPackage::open_path(&package_path) {
+        Ok(pkg) => pkg,
+        Err(e) => {
+            // 版本校验失败时探测过期信息，供前端引导重新生成
+            if let Some(stale) = DataPackage::probe_stale(&package_path, None) {
+                return Ok(stale_load_result(&package_path, &stale, None));
+            }
+            return Err(format!("无法打开数据包: {}", e));
+        }
+    };
     let meta = pkg
         .get_meta()
         .map_err(|e| format!("无法读取元信息: {}", e))?;
@@ -254,7 +320,7 @@ pub fn load_package(path: String, state: State<Mutex<AppState>>) -> Result<LoadR
     state.store = Some(store);
     state.data_package = Some(pkg);
 
-    Ok(LoadResult {
+    Ok(LoadResult::Ok {
         meta: PackageMetaInfo::from(meta),
         entry_count,
     })

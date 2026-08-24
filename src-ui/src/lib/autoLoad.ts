@@ -1,35 +1,41 @@
 import { listen } from '@tauri-apps/api/event';
-import { 
+import {
   packagePath, elfPath, elfFileName, elfTotalCount,
   a2lPath, a2lNames, elfEntries, a2lVariables,
   isLoading, statusMessage
 } from './stores';
-import { 
-  loadPackage, loadA2l, searchElfEntries, searchA2lVariables 
+import {
+  loadPackage, loadA2l, searchElfEntries, searchA2lVariables
 } from './commands';
+import { handleStalePackage } from './stalePackage';
 
 export function setupAutoLoad(onAutoLoad?: () => void) {
   listen<{ package?: string; a2l?: string }>(
     'auto-load-files',
     async (event) => {
       const { package: pkg, a2l } = event.payload;
-      
+
       if (pkg || a2l) {
         onAutoLoad?.();
       }
-      
+
       if (pkg) {
         try {
           isLoading.set(true);
           statusMessage.set('⏳ 正在加载数据包...');
           const result = await loadPackage(pkg);
-          packagePath.set(pkg);
-          elfPath.set(result.meta.elf_path || null);
-          elfFileName.set(result.meta.file_name);
-          elfTotalCount.set(result.entry_count);
-          const entries = await searchElfEntries('', 0, 10000);
-          elfEntries.set(entries);
-          statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+          if (result.status === 'stale') {
+            // 缓存过期：弹出带原因提示的生成对话框
+            handleStalePackage(result);
+          } else {
+            packagePath.set(pkg);
+            elfPath.set(result.meta.elf_path || null);
+            elfFileName.set(result.meta.file_name);
+            elfTotalCount.set(result.entry_count);
+            const entries = await searchElfEntries('', 0, 10000);
+            elfEntries.set(entries);
+            statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+          }
         } catch (e) {
           statusMessage.set(`❌ 加载数据包失败: ${e}`);
         }
@@ -68,7 +74,14 @@ export async function testLoadFiles(pkgPath?: string, a2lFilePath?: string): Pro
       const result = await loadPackage(pkgPath);
       console.log('[testLoadFiles] Step 2: Package result:', result);
       debug.packageResult = result;
-      
+
+      if (result.status === 'stale') {
+        // 测试钩子不弹窗，直接报告过期原因保证 E2E 行为可预测
+        isLoading.set(false);
+        statusMessage.set(`⚠️ ${result.reason}`);
+        return { success: false, error: result.reason, debug };
+      }
+
       packagePath.set(pkgPath);
       elfPath.set(result.meta.elf_path || null);
       elfFileName.set(result.meta.file_name);

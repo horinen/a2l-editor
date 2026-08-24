@@ -15,6 +15,7 @@
   import ContextMenuElf from '$lib/components/ContextMenuElf.svelte';
   import LoadingOverlay from '$lib/components/LoadingOverlay.svelte';
   import { setupAutoLoad, testLoadFiles } from '$lib/autoLoad';
+  import { handleStalePackage } from '$lib/stalePackage';
   import { 
     elfSelectedIndices, a2lSelectedNames, a2lPath, elfEntries,
     statusMessage, a2lVariables, elfPath, elfFileName, elfTotalCount,
@@ -47,13 +48,18 @@
         try {
           const path = recentElf[0].path;
           const result = await loadElf(path);
-          elfPath.set(path);
-          elfFileName.set(result.meta.file_name);
-          elfTotalCount.set(result.entry_count);
-          packagePath.set(path + '.a2ldata');
-          const entries = await searchElfEntries('', 0, 10000);
-          elfEntries.set(entries);
-          statusMessage.set(`✅ 已恢复 ${result.entry_count} 个条目`);
+          if (result.status === 'stale') {
+            // 缓存过期：弹出带原因提示的生成对话框（升级后首次启动的高频场景）
+            handleStalePackage(result);
+          } else {
+            elfPath.set(path);
+            elfFileName.set(result.meta.file_name);
+            elfTotalCount.set(result.entry_count);
+            packagePath.set(path + '.a2ldata');
+            const entries = await searchElfEntries('', 0, 10000);
+            elfEntries.set(entries);
+            statusMessage.set(`✅ 已恢复 ${result.entry_count} 个条目`);
+          }
         } catch (e) {
           if (String(e).includes('数据包不存在')) {
             elfPath.set(recentElf[0].path);

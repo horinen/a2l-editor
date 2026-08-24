@@ -4,6 +4,7 @@
   import { loadElf, loadPackage, loadA2l, searchElfEntries, searchA2lVariables } from '$lib/commands';
   import { elfEntries, a2lNames, statusMessage } from '$lib/stores';
   import { addRecentElfFile, addRecentA2lFile, getLastElfDir, getLastA2lDir } from '$lib/recentFiles';
+  import { handleStalePackage } from '$lib/stalePackage';
 
   async function handleImportElf() {
     const selected = await open({
@@ -16,15 +17,21 @@
       statusMessage.set('⏳ 正在加载...');
       try {
         const result = await loadElf(selected as string);
-        elfPath.set(selected as string);
-        elfFileName.set(result.meta.file_name);
-        elfTotalCount.set(result.entry_count);
-        packagePath.set((selected as string) + '.a2ldata');
-        const entries = await searchElfEntries('', 0, 10000);
-        elfEntries.set(entries);
-        const name = (selected as string).split('/').pop() || '';
-        addRecentElfFile(selected as string, name);
-        statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        if (result.status === 'stale') {
+          // 缓存过期：弹出带原因提示的生成对话框
+          handleStalePackage(result);
+          addRecentElfFile(selected as string, (selected as string).split('/').pop() || '');
+        } else {
+          elfPath.set(selected as string);
+          elfFileName.set(result.meta.file_name);
+          elfTotalCount.set(result.entry_count);
+          packagePath.set((selected as string) + '.a2ldata');
+          const entries = await searchElfEntries('', 0, 10000);
+          elfEntries.set(entries);
+          const name = (selected as string).split('/').pop() || '';
+          addRecentElfFile(selected as string, name);
+          statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        }
       } catch (e) {
         statusMessage.set(`❌ 加载失败: ${e}`);
         if (String(e).includes('数据包不存在')) {
@@ -50,13 +57,18 @@
       isLoading.set(true);
       try {
         const result = await loadPackage(selected as string);
-        packagePath.set(selected as string);
-        elfPath.set(result.meta.elf_path || null);
-        elfFileName.set(result.meta.file_name);
-        elfTotalCount.set(result.entry_count);
-        const entries = await searchElfEntries('', 0, 10000);
-        elfEntries.set(entries);
-        statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        if (result.status === 'stale') {
+          // 缓存过期：弹出带原因提示的生成对话框
+          handleStalePackage(result);
+        } else {
+          packagePath.set(selected as string);
+          elfPath.set(result.meta.elf_path || null);
+          elfFileName.set(result.meta.file_name);
+          elfTotalCount.set(result.entry_count);
+          const entries = await searchElfEntries('', 0, 10000);
+          elfEntries.set(entries);
+          statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        }
       } catch (e) {
         statusMessage.set(`❌ 加载失败: ${e}`);
       }

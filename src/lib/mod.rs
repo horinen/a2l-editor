@@ -13,7 +13,7 @@ pub use a2l::{
     CompuMethodType, ExportKind, PreviewResult, SaveResult, TabIntpPair, TabVerbPair,
     VariableChanges, VariableEdit,
 };
-pub use data_package::{DataPackage, PackageMeta};
+pub use data_package::{DataPackage, PackageMeta, StaleProbe};
 pub use dwarf::{analyze_variables_with_dwarf, DwarfParser};
 pub use elf::{DwarfStats, ElfParser, GenerationProfile};
 pub use types::{

@@ -16,6 +16,7 @@
   } from '$lib/recentFiles';
 
   import { getVersion } from '@tauri-apps/api/app';
+  import { handleStalePackage } from '$lib/stalePackage';
 
   let showMenu = $state(false);
   let version = $state('');
@@ -31,14 +32,20 @@
     statusMessage.set('⏳ 正在加载...');
     try {
       const result = await loadElf(path);
+      if (result.status === 'stale') {
+        // 缓存过期：弹出带原因提示的生成对话框，保留最近文件记录
+        handleStalePackage(result);
+        recentElfFiles = addRecentElfFile(path, path.split('/').pop() || path);
+        return;
+      }
       elfPath.set(path);
       elfFileName.set(result.meta.file_name);
       elfTotalCount.set(result.entry_count);
       packagePath.set(path + '.a2ldata');
-      
+
       const entries = await searchElfEntries('', 0, 10000);
       elfEntries.set(entries);
-      
+
       const name = path.split('/').pop() || path;
       recentElfFiles = addRecentElfFile(path, name);
       statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
@@ -54,8 +61,9 @@
         recentElfFiles = removeRecentElfFile(path);
       }
       throw e;
+    } finally {
+      isLoading.set(false);
     }
-    isLoading.set(false);
   }
 
   async function loadA2lFromPath(path: string) {
@@ -105,15 +113,20 @@
       statusMessage.set('⏳ 正在加载数据包...');
       try {
         const result = await loadPackage(selected as string);
-        packagePath.set(selected as string);
-        elfPath.set(result.meta.elf_path || null);
-        elfFileName.set(result.meta.file_name);
-        elfTotalCount.set(result.entry_count);
-        
-        const entries = await searchElfEntries('', 0, 10000);
-        elfEntries.set(entries);
-        
-        statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        if (result.status === 'stale') {
+          // 缓存过期：弹出带原因提示的生成对话框
+          handleStalePackage(result);
+        } else {
+          packagePath.set(selected as string);
+          elfPath.set(result.meta.elf_path || null);
+          elfFileName.set(result.meta.file_name);
+          elfTotalCount.set(result.entry_count);
+
+          const entries = await searchElfEntries('', 0, 10000);
+          elfEntries.set(entries);
+
+          statusMessage.set(`✅ 已加载 ${result.entry_count} 个条目`);
+        }
       } catch (e) {
         statusMessage.set(`❌ 加载失败: ${e}`);
       }
