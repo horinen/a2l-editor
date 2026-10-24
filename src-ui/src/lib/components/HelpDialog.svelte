@@ -81,12 +81,12 @@
         </section>
 
         <section>
-          <h3>转化系数 (COMPU_METHOD)</h3>
-          <p>选中单个变量后，编辑区的「转化系数」区块：</p>
+          <h3>线性转换 (COMPU_METHOD)</h3>
+          <p>选中单个变量后，编辑区的「线性转换」区块，用开关控制：</p>
           <ul>
-            <li><strong>F (斜率) + OFFSET (偏移)</strong>: 两者必须同时填写，保存时自动生成 LINEAR 类型的 COMPU_METHOD</li>
-            <li><strong>Unit (单位)</strong>: 可独立修改</li>
-            <li><strong>🔧 转换关系面板</strong>: Header 顶部按钮，支持新建/删除 COMPU_METHOD，类型含 LINEAR / TAB_VERB / TAB_INTP / IDENTICAL，可预览转换结果</li>
+            <li><strong>启用转换</strong>: 打开后填写 F (斜率)、OFFSET (偏移)、Unit (单位)，保存时自动按值复用或新建 LINEAR 类型的 COMPU_METHOD 并挂到当前变量，只影响这个变量</li>
+            <li><strong>关闭开关保存</strong>: 写入 NO_COMPU_METHOD，物理值 = 原始值</li>
+            <li><strong>文字表/插值表</strong>: 变量挂着 TAB_VERB/TAB_INTP 转换时会提示项数，开关保持关闭保存不会改动它</li>
           </ul>
         </section>
 

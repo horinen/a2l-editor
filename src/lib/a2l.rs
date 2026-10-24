@@ -164,6 +164,11 @@ pub struct A2lVariable {
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
+    /// 引用的 COMPU_METHOD 转换类型（LINEAR / TAB_VERB / TAB_INTP / IDENTICAL），
+    /// 无转换或引用未定义时为 None
+    pub compu_type: Option<String>,
+    /// 文字表/插值表的项数，仅 TAB_* 类型有值
+    pub compu_pair_count: Option<usize>,
 }
 
 impl A2lGenerator {
@@ -368,7 +373,7 @@ impl A2lGenerator {
         output
     }
 
-    pub fn generate_compu_method_name(f: f64, offset: f64) -> String {
+    pub fn generate_compu_method_name(f: f64, offset: f64, unit: &str) -> String {
         let format_f = if f == f.trunc() {
             format!("{}", f as i64)
         } else {
@@ -380,12 +385,26 @@ impl A2lGenerator {
             format!("{}", offset).replace('.', "_")
         };
         let offset_sign = if offset < 0.0 { "N" } else { "O" };
-        format!(
+        let base = format!(
             "CM_F{}_{}{}",
             format_f,
             offset_sign,
             format_offset.replace('-', "")
-        )
+        );
+        // 单位编入名称，避免同系数不同单位的转换生成重名 COMPU_METHOD
+        if unit.is_empty() {
+            return base;
+        }
+        let suffix: String = unit
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let suffix = suffix.trim_matches('_');
+        if suffix.is_empty() {
+            format!("{}_U", base)
+        } else {
+            format!("{}_{}", base, suffix)
+        }
     }
 
     pub fn generate_compu_method_block(name: &str, f: f64, offset: f64, unit: &str) -> String {
@@ -1094,10 +1113,12 @@ impl A2lGenerator {
         let record_layouts = Self::parse_record_layout_names(content);
 
         let existing_compu_methods = A2lParser::parse_compu_methods(content);
+        // 仅在 LINEAR 类型内按值去重，避免误挂到文字表/插值表；单位参与去重键
         let mut compu_method_map: HashMap<String, String> = existing_compu_methods
             .iter()
+            .filter(|m| m.conversion_type == CompuMethodType::LINEAR)
             .map(|m| {
-                let key = format!("{:.10}_{:.10}", m.f, m.offset);
+                let key = format!("{:.10}_{:.10}_{}", m.f, m.offset, m.unit);
                 (key, m.name.clone())
             })
             .collect();
@@ -1109,16 +1130,16 @@ impl A2lGenerator {
             let mut modified_edit = edit.clone();
             if let Some(ref changes) = edit.changes {
                 if let (Some(f), Some(offset)) = (changes.f, changes.offset) {
-                    let key = format!("{:.10}_{:.10}", f, offset);
-                    let compu_name = if let Some(existing_name) = compu_method_map.get(&key) {
-                        existing_name.clone()
-                    } else {
-                        let new_name = Self::generate_compu_method_name(f, offset);
-                        compu_method_map.insert(key, new_name.clone());
-                        let unit = changes.unit.clone().unwrap_or_default();
-                        new_compu_methods_to_add.push((new_name.clone(), f, offset, unit));
-                        new_name
-                    };
+                    let unit = changes.unit.clone().unwrap_or_default();
+                    let key = format!("{:.10}_{:.10}_{}", f, offset, unit);
+                let compu_name = if let Some(existing_name) = compu_method_map.get(&key) {
+                    existing_name.clone()
+                } else {
+                    let new_name = Self::generate_compu_method_name(f, offset, &unit);
+                    compu_method_map.insert(key, new_name.clone());
+                    new_compu_methods_to_add.push((new_name.clone(), f, offset, unit));
+                    new_name
+                };
                     modified_edit.changes = Some(VariableChanges {
                         compu_method: Some(compu_name),
                         ..changes.clone()
@@ -1130,33 +1151,20 @@ impl A2lGenerator {
 
         for (name, f, offset, unit) in &new_compu_methods_to_add {
             let block = Self::generate_compu_method_block(name, *f, *offset, unit);
+            // 插到最后一个 /end COMPU_METHOD 行之后；不能落在行首，否则会拼进上一个块内部
             let insert_pos = result
                 .rfind("/end COMPU_METHOD")
+                .map(|pos| Self::line_end_after_pos(&result, pos))
                 .or_else(|| result.find("/begin MEASUREMENT"))
                 .or_else(|| result.find("/begin CHARACTERISTIC"))
                 .or_else(|| result.rfind("/end MODULE"))
                 .unwrap_or(result.len());
 
-            let actual_insert_pos = {
-                let before = &result[..insert_pos];
-                if let Some(last_newline) = before.rfind('\n') {
-                    let line_start = last_newline + 1;
-                    let prefix = &result[line_start..insert_pos];
-                    if prefix.chars().all(|c| c.is_whitespace()) {
-                        line_start
-                    } else {
-                        insert_pos
-                    }
-                } else {
-                    0
-                }
-            };
-
             result = format!(
                 "{}{}{}",
-                &result[..actual_insert_pos],
+                &result[..insert_pos],
                 block,
-                &result[actual_insert_pos..]
+                &result[insert_pos..]
             );
         }
 
@@ -1267,6 +1275,55 @@ impl A2lParser {
 
     /// 解析 A2L 文件中所有 MEASUREMENT 和 CHARACTERISTIC 变量
     pub fn parse_all_variables(content: &str) -> Vec<A2lVariable> {
+        let mut variables = Self::parse_variable_blocks(content);
+        Self::resolve_compu_info(content, &mut variables);
+        variables
+    }
+
+    /// 根据文件中实际定义的 COMPU_METHOD 块补充转换类型、系数与单位，
+    /// 覆盖仅按 CM 名字解码的回显（外部工具命名的转换也能读出系数）
+    fn resolve_compu_info(content: &str, variables: &mut [A2lVariable]) {
+        use std::collections::HashMap;
+
+        let parsed_methods = A2lParser::parse_compu_methods(content);
+        let methods: HashMap<String, &CompuMethod> = parsed_methods
+            .iter()
+            .map(|m| (m.name.clone(), m))
+            .collect();
+
+        for var in variables.iter_mut() {
+            let cm_name = match var.compu_method.as_deref() {
+                Some(n) if n != "NO_COMPU_METHOD" => n,
+                _ => continue,
+            };
+            let Some(m) = methods.get(cm_name) else {
+                // 引用未定义：名字以 CM_F 开头的按线性系数解码结果处理
+                if var.f.is_some() {
+                    var.compu_type = Some("LINEAR".to_string());
+                }
+                continue;
+            };
+            var.compu_type = Some(m.conversion_type.to_string());
+            match m.conversion_type {
+                CompuMethodType::LINEAR => {
+                    var.f = Some(m.f);
+                    var.offset = Some(m.offset);
+                    if !m.unit.is_empty() {
+                        var.unit = Some(m.unit.clone());
+                    }
+                }
+                CompuMethodType::TAB_VERB => {
+                    var.compu_pair_count = Some(m.verb_pairs.len());
+                }
+                CompuMethodType::TAB_INTP => {
+                    var.compu_pair_count = Some(m.intp_pairs.len());
+                }
+                CompuMethodType::IDENTICAL => {}
+            }
+        }
+    }
+
+    fn parse_variable_blocks(content: &str) -> Vec<A2lVariable> {
         let mut variables = Vec::new();
         let mut in_measurement = false;
         let mut in_characteristic = false;
@@ -1459,6 +1516,8 @@ impl A2lParser {
             f,
             offset,
             unit,
+            compu_type: None,
+            compu_pair_count: None,
         }
     }
 
@@ -1570,6 +1629,21 @@ impl A2lParser {
                 let pairs = Self::parse_intp_pairs_from_block(rest);
                 intp_pairs = pairs;
                 continue;
+            }
+
+            // 名字另起一行的格式（本工具生成的写法）：首个非关键字行，第一个词是名字，引号内是描述
+            if name.is_empty() {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if !parts.is_empty() {
+                    name = parts[0].to_string();
+                    if let Some(start) = trimmed.find('"') {
+                        if let Some(end) = trimmed.rfind('"') {
+                            if end > start {
+                                description = trimmed[start + 1..end].to_string();
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2048,5 +2122,180 @@ mod tests {
         assert_eq!(variables[0].compu_method.as_deref(), Some("CM_CalValue"));
         assert_eq!(variables[1].name, "LegacyValue");
         assert_eq!(variables[1].compu_method.as_deref(), Some("CM_Legacy"));
+    }
+
+    fn linear_edit(name: &str, f: f64, offset: f64, unit: Option<&str>) -> VariableEdit {
+        VariableEdit {
+            action: "modify".to_string(),
+            original_name: name.to_string(),
+            changes: Some(VariableChanges {
+                name: None,
+                address: None,
+                data_type: None,
+                var_type: None,
+                bit_mask: None,
+                compu_method: None,
+                f: Some(f),
+                offset: Some(offset),
+                unit: unit.map(|s| s.to_string()),
+                symbol_link: None,
+            }),
+            entry: None,
+            export_mode: None,
+        }
+    }
+
+    #[test]
+    fn apply_linear_conversion_resolves_and_roundtrips() {
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin MEASUREMENT Speed ""
+      UWORD NO_COMPU_METHOD 0 65535
+      ECU_ADDRESS 0x00000000
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT
+"#;
+
+        let (updated, _) = A2lGenerator::apply_changes(
+            content,
+            &[linear_edit("Speed", 0.1, 0.0, Some("km/h"))],
+            Endianness::Little,
+        )
+        .unwrap();
+
+        // CM 名称编入单位，变量引用它
+        assert!(updated.contains("CM_F0_1_O0_km_h"));
+        assert!(updated.contains("UWORD CM_F0_1_O0_km_h 0 65535"));
+        assert!(updated.contains("COEFFS 0.1 0 0.0 0.0 0.0 0.0"));
+
+        // 回显：从真实 CM 块解析出类型、系数、单位
+        let variables = A2lParser::parse_all_variables(&updated);
+        assert_eq!(variables[0].compu_type.as_deref(), Some("LINEAR"));
+        assert_eq!(variables[0].f, Some(0.1));
+        assert_eq!(variables[0].offset, Some(0.0));
+        assert_eq!(variables[0].unit.as_deref(), Some("km/h"));
+    }
+
+    #[test]
+    fn same_coeffs_with_different_unit_do_not_share_compu_method() {
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin COMPU_METHOD
+      CM_F0_1_O0_V "y = 0.1 * x + 0"
+      LINEAR "%10.4" "V" "V"
+      COEFFS 0.1 0 0.0 0.0 0.0 0.0
+    /end COMPU_METHOD
+    /begin MEASUREMENT VoltA ""
+      UWORD CM_F0_1_O0_V 0 65535
+      ECU_ADDRESS 0x00000000
+    /end MEASUREMENT
+    /begin MEASUREMENT CurrB ""
+      UWORD NO_COMPU_METHOD 0 65535
+      ECU_ADDRESS 0x00000004
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT
+"#;
+
+        let (updated, _) = A2lGenerator::apply_changes(
+            content,
+            &[linear_edit("CurrB", 0.1, 0.0, Some("A"))],
+            Endianness::Little,
+        )
+        .unwrap();
+
+        // 同系数不同单位：不复用 V 的 CM，新建带 A 后缀的
+        assert!(updated.contains("UWORD CM_F0_1_O0_A 0 65535"));
+        assert!(!updated.contains("UWORD CM_F0_1_O0_V 0 65535\n      ECU_ADDRESS 0x00000004"));
+
+        // 无单位的同系数请求也不复用带单位的 CM
+        let (updated2, _) = A2lGenerator::apply_changes(
+            content,
+            &[linear_edit("CurrB", 0.1, 0.0, None)],
+            Endianness::Little,
+        )
+        .unwrap();
+        assert!(updated2.contains("UWORD CM_F0_1_O0 0 65535"));
+    }
+
+    #[test]
+    fn linear_conversion_never_matches_tab_verb_method() {
+        // 文字表 COEFFS 缺省时解析为 f=1/offset=0，但类型不是 LINEAR，去重必须跳过
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin COMPU_METHOD
+      CM_STATES "状态表"
+      TAB_VERB "%3.0" "" ""
+      COMPU_VTAB 0 "OFF" 1 "ON"
+    /end COMPU_METHOD
+    /begin MEASUREMENT StateA ""
+      UWORD CM_STATES 0 65535
+      ECU_ADDRESS 0x00000000
+    /end MEASUREMENT
+    /begin MEASUREMENT RawB ""
+      UWORD NO_COMPU_METHOD 0 65535
+      ECU_ADDRESS 0x00000004
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT
+"#;
+
+        let (updated, _) = A2lGenerator::apply_changes(
+            content,
+            &[linear_edit("RawB", 1.0, 0.0, None)],
+            Endianness::Little,
+        )
+        .unwrap();
+
+        assert!(updated.contains("UWORD CM_F1_O0 0 65535"));
+        assert!(!updated.contains("UWORD CM_STATES 0 65535\n      ECU_ADDRESS 0x00000004"));
+
+        // 文字表变量的类型与项数回显
+        let variables = A2lParser::parse_all_variables(&updated);
+        let state_a = variables.iter().find(|v| v.name == "StateA").unwrap();
+        assert_eq!(state_a.compu_type.as_deref(), Some("TAB_VERB"));
+        assert_eq!(state_a.compu_pair_count, Some(2));
+    }
+
+    #[test]
+    fn clearing_conversion_writes_no_compu_method() {
+        let content = r#"
+/begin PROJECT P ""
+  /begin MODULE M ""
+    /begin MEASUREMENT Speed ""
+      UWORD CM_F0_1_O0 0 65535
+      ECU_ADDRESS 0x00000000
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT
+"#;
+
+        let edits = vec![VariableEdit {
+            action: "modify".to_string(),
+            original_name: "Speed".to_string(),
+            changes: Some(VariableChanges {
+                name: None,
+                address: None,
+                data_type: None,
+                var_type: None,
+                bit_mask: None,
+                compu_method: Some("NO_COMPU_METHOD".to_string()),
+                f: None,
+                offset: None,
+                unit: None,
+                symbol_link: None,
+            }),
+            entry: None,
+            export_mode: None,
+        }];
+
+        let (updated, _) = A2lGenerator::apply_changes(content, &edits, Endianness::Little).unwrap();
+
+        assert!(updated.contains("UWORD NO_COMPU_METHOD 0 65535"));
+        assert!(!updated.contains("UWORD CM_F0_1_O0"));
     }
 }

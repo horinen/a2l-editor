@@ -21,6 +21,10 @@ export interface A2lVariable {
   f: number | null;
   offset: number | null;
   unit: string | null;
+  /** 引用的 COMPU_METHOD 转换类型（LINEAR / TAB_VERB / TAB_INTP / IDENTICAL），无转换为 null */
+  compu_type: string | null;
+  /** 文字表/插值表项数，仅 TAB_* 类型有值 */
+  compu_pair_count: number | null;
 }
 
 export interface LoadOkResult {

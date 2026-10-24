@@ -228,6 +228,8 @@ pub struct VariableInfo {
     pub f: Option<f64>,
     pub offset: Option<f64>,
     pub unit: Option<String>,
+    pub compu_type: Option<String>,
+    pub compu_pair_count: Option<usize>,
 }
 
 impl From<&A2lVariable> for VariableInfo {
@@ -243,6 +245,8 @@ impl From<&A2lVariable> for VariableInfo {
             f: var.f,
             offset: var.offset,
             unit: var.unit.clone(),
+            compu_type: var.compu_type.clone(),
+            compu_pair_count: var.compu_pair_count,
         }
     }
 }
